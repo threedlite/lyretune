@@ -1,6 +1,8 @@
 # LyreTune - Ancient Greek Lyre Tuner
 
 A Rust/egui application for tuning ancient Greek lyres using microphone input and frequency analysis.
+Android and Mac versions also included.  Supported and maintained for US users only.
+
 
 ## Features
 
