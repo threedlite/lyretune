@@ -1,0 +1,13 @@
+[package]
+name = "lyretune"
+version = "0.1.1"
+edition = "2021"
+
+[dependencies]
+eframe = "0.30"
+egui = "0.30"
+egui_plot = "0.30"
+cpal = "0.15"
+rustfft = "6.2"
+hound = "3.5"
+num-complex = "0.4"
