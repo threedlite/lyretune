@@ -539,6 +539,13 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 text = "Version: ${packageInfo?.versionName ?: "Unknown"} (${packageInfo?.versionCode ?: "?"})",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            
+            Text(
+                text = "Built: ${BuildConfig.BUILD_TIMESTAMP}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 16.dp)
             )
             
