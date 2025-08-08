@@ -1,4 +1,4 @@
-package com.lyretune.app
+package com.lyretuner.app
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -29,18 +29,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.lyretune.app.ui.theme.LyreTuneTheme
-import com.lyretune.app.ui.components.SpectrumVisualizer
-import com.lyretune.app.audio.AudioProcessor
-import com.lyretune.app.audio.ScaleCalculator
-import com.lyretune.app.audio.ScaleType
-import com.lyretune.app.audio.Mode
-import com.lyretune.app.audio.Genus
-import com.lyretune.app.audio.Temperament
+import com.lyretuner.app.ui.theme.LyreTuneTheme
+import com.lyretuner.app.ui.components.SpectrumVisualizer
+import com.lyretuner.app.audio.AudioProcessor
+import com.lyretuner.app.audio.ScaleCalculator
+import com.lyretuner.app.audio.ScaleType
+import com.lyretuner.app.audio.Mode
+import com.lyretuner.app.audio.Genus
+import com.lyretuner.app.audio.Temperament
 import kotlin.math.abs
 import kotlin.math.pow
 import android.util.Log
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.padding
+import androidx.core.view.WindowCompat
 
 class MainActivity : ComponentActivity() {
     private var audioRecord: AudioRecord? = null
@@ -50,6 +54,7 @@ class MainActivity : ComponentActivity() {
     private var playbackThread: Thread? = null
     private var audioTrack: AudioTrack? = null
     private var settingsUpdateTrigger = mutableStateOf(0)
+    private var hasRequestedPermission = false
     
     // New Kotlin audio processor
     private val kotlinAudioProcessor = AudioProcessor()
@@ -64,6 +69,9 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Enable edge-to-edge display
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         
         setContent {
             LyreTuneTheme {
@@ -88,7 +96,10 @@ class MainActivity : ComponentActivity() {
                 startAudioProcessing()
             }
             else -> {
-                requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                if (!hasRequestedPermission) {
+                    hasRequestedPermission = true
+                    requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
             }
         }
     }
@@ -522,7 +533,9 @@ class MainActivity : ComponentActivity() {
         }
         
         Column(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(WindowInsets.statusBars.asPaddingValues())
         ) {
             // Top bar with title, play button, and settings
             Row(
@@ -572,7 +585,24 @@ class MainActivity : ComponentActivity() {
                     // Exit Button
                     IconButton(
                         onClick = {
-                            finish()
+                            // Stop all audio processing
+                            stopPlayback()
+                            stopAudioRecording()
+                            audioRecord?.release()
+                            audioRecord = null
+                            kotlinAudioProcessor.stopProcessing()
+                            
+                            // Exclude from recents and finish
+                            if (android.os.Build.VERSION.SDK_INT >= 21) {
+                                finishAndRemoveTask()
+                            } else {
+                                finish()
+                            }
+                            
+                            // Delay to ensure cleanup, then exit
+                            android.os.Handler(mainLooper).postDelayed({
+                                System.exit(0)
+                            }, 100)
                         }
                     ) {
                         Icon(
@@ -591,7 +621,7 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = 16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (cardIsGreen) 
-                        Color(0xFF4CAF50) else MaterialTheme.colorScheme.surface
+                        Color(0xFFFFD700) else MaterialTheme.colorScheme.surface
                 )
             ) {
                 Row(

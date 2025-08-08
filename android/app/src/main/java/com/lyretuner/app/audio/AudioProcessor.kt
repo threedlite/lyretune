@@ -1,4 +1,4 @@
-package com.lyretune.app.audio
+package com.lyretuner.app.audio
 
 import org.apache.commons.math3.transform.DftNormalization
 import org.apache.commons.math3.transform.FastFourierTransformer

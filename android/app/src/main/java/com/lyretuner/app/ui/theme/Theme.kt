@@ -1,4 +1,4 @@
-package com.lyretune.app.ui.theme
+package com.lyretuner.app.ui.theme
 
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -51,8 +51,8 @@ fun LyreTuneTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = Color(0xFFFFEB3B).toArgb() // Yellow status bar
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true // Dark text on yellow
+            window.statusBarColor = colorScheme.background.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }
 

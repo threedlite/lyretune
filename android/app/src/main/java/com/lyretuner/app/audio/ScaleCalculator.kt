@@ -1,4 +1,4 @@
-package com.lyretune.app.audio
+package com.lyretuner.app.audio
 
 import kotlin.math.*
 

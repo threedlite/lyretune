@@ -1,4 +1,4 @@
-package com.lyretune.app
+package com.lyretuner.app
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,7 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.lyretune.app.ui.theme.LyreTuneTheme
+import com.lyretuner.app.ui.theme.LyreTuneTheme
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -1,4 +1,4 @@
-package com.lyretune.app.ui.components
+package com.lyretuner.app.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTransformGestures
