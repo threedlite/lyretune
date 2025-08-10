@@ -54,7 +54,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb logcat | grep -i lyretune
 
 # Launch app
-adb shell am start -n com.example.lyretune/.MainActivity
+adb shell am start -n com.lyretuner.app/.MainActivity
 ```
 
 ## Play Store Release Build
