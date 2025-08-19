@@ -43,6 +43,8 @@ import android.util.Log
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.padding
 import androidx.core.view.WindowCompat
 
@@ -208,8 +210,8 @@ class MainActivity : ComponentActivity() {
                 if (frequency > 0) {
                     val noteName = kotlinAudioProcessor.getScaleNote(i)
                     android.util.Log.d("LyreTune", "Playing string $i: $noteName at $frequency Hz")
-                    playLyreTone(frequency, 1200) // Play for 1.2 seconds
-                    Thread.sleep(150) // Short pause between notes
+                    playLyreTone(frequency, 1000) // Play for 1 second
+                    Thread.sleep(120) // Short pause between notes
                 }
             }
             
@@ -535,7 +537,7 @@ class MainActivity : ComponentActivity() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(WindowInsets.statusBars.asPaddingValues())
+                .padding(WindowInsets.systemBars.asPaddingValues())
         ) {
             // Top bar with title, play button, and settings
             Row(
@@ -559,13 +561,13 @@ class MainActivity : ComponentActivity() {
                         onClick = { togglePlayPause() },
                         modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = if (isPlaying.value) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primaryContainer
+                            containerColor = if (isPlaying.value) Color(0xFF4CAF50) else Color.Gray
                         )
                     ) {
                         Icon(
                             imageVector = Icons.Filled.PlayArrow,
                             contentDescription = if (isPlaying.value) "Stop" else "Play",
-                            tint = if (isPlaying.value) Color.White else MaterialTheme.colorScheme.onPrimaryContainer
+                            tint = if (isPlaying.value) Color.White else Color.White
                         )
                     }
                     
@@ -621,7 +623,7 @@ class MainActivity : ComponentActivity() {
                     .padding(horizontal = 16.dp),
                 colors = CardDefaults.cardColors(
                     containerColor = if (cardIsGreen) 
-                        Color(0xFFFFD700) else MaterialTheme.colorScheme.surface
+                        Color.Gray else MaterialTheme.colorScheme.surface
                 )
             ) {
                 Row(

@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.lyretuner.app.ui.theme.LyreTuneTheme
 
@@ -337,7 +338,12 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 },
                 valueRange = 4f..24f,
                 steps = 19,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Gray,
+                    activeTrackColor = Color.Gray,
+                    inactiveTrackColor = Color.LightGray
+                )
             )
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -353,7 +359,12 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 },
                 valueRange = -2f..2f,
                 steps = 3,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Gray,
+                    activeTrackColor = Color.Gray,
+                    inactiveTrackColor = Color.LightGray
+                )
             )
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -391,6 +402,14 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                     }
                 }
             }
+            
+            // Help text for FFT Resolution
+            Text(
+                text = "If the app response is too slow, try lowering the FFT Resolution",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+            )
             
             Spacer(modifier = Modifier.height(16.dp))
             
@@ -443,7 +462,12 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 },
                 valueRange = 1f..10f,
                 steps = 8, // 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Gray,
+                    activeTrackColor = Color.Gray,
+                    inactiveTrackColor = Color.LightGray
+                )
             )
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -461,7 +485,12 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 },
                 valueRange = 0f..500f,
                 steps = 99, // 0, 5, 10, 15, ..., 495, 500 (100 steps total)
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Gray,
+                    activeTrackColor = Color.Gray,
+                    inactiveTrackColor = Color.LightGray
+                )
             )
             
             Text(
@@ -486,7 +515,12 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 },
                 valueRange = 0f..0.8f, // 0% to 80%
                 steps = 79, // 1% increments
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.Gray,
+                    activeTrackColor = Color.Gray,
+                    inactiveTrackColor = Color.LightGray
+                )
             )
             
             Text(
@@ -528,27 +562,6 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             
             Spacer(modifier = Modifier.height(32.dp))
             
-            // Version Info
-            val packageInfo = try {
-                context.packageManager.getPackageInfo(context.packageName, 0)
-            } catch (e: PackageManager.NameNotFoundException) {
-                null
-            }
-            
-            Text(
-                text = "Version: ${packageInfo?.versionName ?: "Unknown"} (${packageInfo?.versionCode ?: "?"})",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-            
-            Text(
-                text = "Built: ${BuildConfig.BUILD_TIMESTAMP}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-            
             // Reset to Defaults Button
             Button(
                 onClick = {
@@ -589,6 +602,29 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             ) {
                 Text("Reset to Defaults")
             }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            // Version Info
+            val packageInfo = try {
+                context.packageManager.getPackageInfo(context.packageName, 0)
+            } catch (e: PackageManager.NameNotFoundException) {
+                null
+            }
+            
+            Text(
+                text = "Version: ${packageInfo?.versionName ?: "Unknown"} (${packageInfo?.versionCode ?: "?"})",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+            
+            Text(
+                text = "Built: ${BuildConfig.BUILD_TIMESTAMP}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
         }
     }
 }

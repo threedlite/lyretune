@@ -350,8 +350,8 @@ private fun DrawScope.drawSpectrum(
                 // Draw black background rectangle for text (larger for 3x text)
                 drawRect(
                     color = Color.Black,
-                    topLeft = Offset(width - 300f, y - 40f),
-                    size = androidx.compose.ui.geometry.Size(295f, 70f)
+                    topLeft = Offset(width - 330f, y - 40f),
+                    size = androidx.compose.ui.geometry.Size(315f, 70f)
                 )
                 
                 // Draw text in yellow on black background
