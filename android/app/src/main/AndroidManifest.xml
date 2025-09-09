@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     
     <application
+        android:name=".LyreTuneApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -29,6 +30,11 @@
         
         <activity
             android:name=".SettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.LyreTune" />
+        
+        <activity
+            android:name=".TranspositionActivity"
             android:exported="false"
             android:theme="@style/Theme.LyreTune" />
         

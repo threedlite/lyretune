@@ -4,19 +4,26 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.lyretuner.app.ui.theme.LyreTuneTheme
+import org.json.JSONObject
+import org.json.JSONArray
 
 class SettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -43,18 +50,21 @@ class SettingsActivity : ComponentActivity() {
 fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
     val sharedPrefs = context.getSharedPreferences("lyretune_settings", Context.MODE_PRIVATE)
     
+    // Trigger to force reload of all settings
+    var settingsReloadTrigger by remember { mutableStateOf(0) }
+    
     // Load all settings from SharedPreferences
-    var scaleType by remember { mutableStateOf(sharedPrefs.getInt("scale_type", 0)) }
-    var mode by remember { mutableStateOf(sharedPrefs.getInt("mode", 4)) } // Dorios
-    var genus by remember { mutableStateOf(sharedPrefs.getInt("genus", 0)) } // Diatonic
-    var firstNote by remember { mutableStateOf(sharedPrefs.getString("first_note", "E") ?: "E") }
-    var numStrings by remember { mutableStateOf(sharedPrefs.getInt("num_strings", 7)) }
-    var temperament by remember { mutableStateOf(sharedPrefs.getInt("temperament", 2)) } // Just Ancient
-    var octaveOffset by remember { mutableStateOf(sharedPrefs.getInt("octave_offset", 0)) }
-    var fftResolution by remember { mutableStateOf(sharedPrefs.getInt("fft_resolution", 5)) } // Default to maximum resolution (65536)
+    var scaleType by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("scale_type", 0)) }
+    var mode by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("mode", 4)) } // Dorios
+    var genus by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("genus", 0)) } // Diatonic
+    var firstNote by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getString("first_note", "E") ?: "E") }
+    var numStrings by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("num_strings", 7)) }
+    var temperament by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("temperament", 2)) } // Just Ancient
+    var octaveOffset by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("octave_offset", 0)) }
+    var fftResolution by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("fft_resolution", 3)) } // Default to very high (16384)
     
     // Load magnitude scale from SharedPreferences
-    var magnitudeScale by remember { 
+    var magnitudeScale by remember(settingsReloadTrigger) { 
         mutableStateOf(
             try {
                 sharedPrefs.getInt("magnitude_scale", 1) // Default to 5 (index 1)
@@ -86,6 +96,18 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
+            // Profile Management Section
+            ProfileManagementCard(
+                context = context,
+                sharedPrefs = sharedPrefs,
+                onProfileLoaded = {
+                    // Trigger a recomposition to reload all settings from SharedPreferences
+                    settingsReloadTrigger++
+                }
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
             // Scale Type Selection
             var scaleTypeExpanded by remember { mutableStateOf(false) }
             ExposedDropdownMenuBox(
@@ -450,7 +472,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // Tolerance Setting (in Hz)
-            var tolerance by remember { mutableStateOf(sharedPrefs.getInt("tolerance", 3)) } // Default 3 Hz
+            var tolerance by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("tolerance", 3)) } // Default 3 Hz
             
             Text("Tolerance: $tolerance Hz")
             Slider(
@@ -473,7 +495,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // High-pass Filter Setting (in Hz)
-            var highPassFilter by remember { mutableStateOf(sharedPrefs.getInt("high_pass_filter", 150)) } // Default 150 Hz
+            var highPassFilter by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getInt("high_pass_filter", 150)) } // Default 150 Hz
             
             Text("High-pass Filter: $highPassFilter Hz")
             Slider(
@@ -503,7 +525,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // Noise Gate Setting (magnitude threshold)
-            var noiseGate by remember { mutableStateOf(sharedPrefs.getFloat("noise_gate", 0.30f)) } // Default 30%
+            var noiseGate by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getFloat("noise_gate", 0.30f)) } // Default 30%
             
             Text("Noise Gate: ${(noiseGate * 100).toInt()}%")
             Slider(
@@ -533,7 +555,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // Full Spectrum Display Option
-            var showFullSpectrum by remember { mutableStateOf(sharedPrefs.getBoolean("show_full_spectrum", false)) }
+            var showFullSpectrum by remember(settingsReloadTrigger) { mutableStateOf(sharedPrefs.getBoolean("show_full_spectrum", false)) }
             
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -562,6 +584,19 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             
             Spacer(modifier = Modifier.height(32.dp))
             
+            // Transposition Tool Button
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(context, TranspositionActivity::class.java)
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Open Transposition Tool")
+            }
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
             // Reset to Defaults Button
             Button(
                 onClick = {
@@ -573,7 +608,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                     numStrings = 7
                     temperament = 2  // Just Ancient
                     octaveOffset = 0
-                    fftResolution = 5  // 65536 (Maximum)
+                    fftResolution = 3  // 16384 (Very High)
                     magnitudeScale = 1  // 5
                     tolerance = 3  // 3 Hz
                     highPassFilter = 150  // 150 Hz
@@ -608,7 +643,8 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             // Version Info
             val packageInfo = try {
                 context.packageManager.getPackageInfo(context.packageName, 0)
-            } catch (e: PackageManager.NameNotFoundException) {
+            } catch (e: Exception) {
+                e.printStackTrace()
                 null
             }
             
@@ -623,8 +659,303 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                 text = "Built: ${BuildConfig.BUILD_TIMESTAMP}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 16.dp)
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+            
+            // License Link
+            Text(
+                text = "View License",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    textDecoration = TextDecoration.Underline
+                ),
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .padding(bottom = 16.dp)
+                    .clickable {
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/threedlite/lyretune/blob/main/LICENSE.txt"))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
             )
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProfileManagementCard(
+    context: Context, 
+    sharedPrefs: android.content.SharedPreferences,
+    onProfileLoaded: () -> Unit = {}
+) {
+    var profileName by remember { mutableStateOf("") }
+    var showSaveDialog by remember { mutableStateOf(false) }
+    val profiles = remember { mutableStateOf(loadProfileList(context)) }
+    var selectedProfile by remember { mutableStateOf("") }
+    var profileExpanded by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var profileToDelete by remember { mutableStateOf("") }
+    
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                text = "Settings Profiles",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(bottom = 12.dp)
+            )
+            
+            // Save profile section
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = profileName,
+                    onValueChange = { profileName = it },
+                    label = { Text("Profile Name") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true
+                )
+                Button(
+                    onClick = {
+                        if (profileName.isNotBlank()) {
+                            saveProfile(context, profileName, sharedPrefs)
+                            profileName = ""
+                            showSaveDialog = true
+                            profiles.value = loadProfileList(context)
+                        }
+                    },
+                    enabled = profileName.isNotBlank()
+                ) {
+                    Text("Save")
+                }
+            }
+            
+            // Show save confirmation
+            if (showSaveDialog) {
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.delay(2000)
+                    showSaveDialog = false
+                }
+                Text(
+                    text = "Profile saved successfully!",
+                    color = Color.Green,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            
+            // Load profile section
+            if (profiles.value.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Text(
+                    text = "Load Profile:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ExposedDropdownMenuBox(
+                        expanded = profileExpanded,
+                        onExpandedChange = { profileExpanded = !profileExpanded },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        TextField(
+                            value = selectedProfile.ifEmpty { "Select a profile..." },
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = profileExpanded) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = profileExpanded,
+                            onDismissRequest = { profileExpanded = false }
+                        ) {
+                            profiles.value.forEach { profile ->
+                                DropdownMenuItem(
+                                    text = { Text(profile) },
+                                    onClick = {
+                                        selectedProfile = profile
+                                        profileExpanded = false
+                                    },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = {
+                                                profileToDelete = profile
+                                                showDeleteDialog = true
+                                            }
+                                        ) {
+                                            Icon(
+                                                Icons.Filled.Delete,
+                                                contentDescription = "Delete",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    
+                    Button(
+                        onClick = {
+                            if (selectedProfile.isNotBlank()) {
+                                loadProfile(context, selectedProfile, sharedPrefs)
+                                onProfileLoaded()
+                            }
+                        },
+                        enabled = selectedProfile.isNotBlank()
+                    ) {
+                        Text("Load")
+                    }
+                }
+            }
+        }
+    }
+    
+    // Delete confirmation dialog
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { 
+                showDeleteDialog = false 
+                profileToDelete = ""
+            },
+            title = { Text("Delete Profile") },
+            text = { Text("Are you sure you want to delete the profile \"$profileToDelete\"?") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteProfile(context, profileToDelete)
+                        profiles.value = loadProfileList(context)
+                        if (selectedProfile == profileToDelete) {
+                            selectedProfile = ""
+                        }
+                        showDeleteDialog = false
+                        profileToDelete = ""
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDeleteDialog = false
+                        profileToDelete = ""
+                    }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+// Profile management helper functions
+fun sanitizeProfileName(name: String): String {
+    // Replace invalid characters with underscores
+    return name.replace(Regex("[^a-zA-Z0-9_\\- ]"), "_").take(50)
+}
+
+fun saveProfile(context: Context, profileName: String, settingsPrefs: android.content.SharedPreferences) {
+    try {
+        val profilePrefs = context.getSharedPreferences("lyretune_profiles", Context.MODE_PRIVATE)
+        val sanitizedName = sanitizeProfileName(profileName)
+        
+        // Create JSON object with all settings
+        val profileData = JSONObject().apply {
+            put("scale_type", settingsPrefs.getInt("scale_type", 0))
+            put("mode", settingsPrefs.getInt("mode", 4))
+            put("genus", settingsPrefs.getInt("genus", 0))
+            put("first_note", settingsPrefs.getString("first_note", "E"))
+            put("num_strings", settingsPrefs.getInt("num_strings", 7))
+            put("temperament", settingsPrefs.getInt("temperament", 2))
+            put("octave_offset", settingsPrefs.getInt("octave_offset", 0))
+            put("fft_resolution", settingsPrefs.getInt("fft_resolution", 3))
+            put("magnitude_scale", settingsPrefs.getInt("magnitude_scale", 1))
+            put("tolerance", settingsPrefs.getInt("tolerance", 3))
+            put("high_pass_filter", settingsPrefs.getInt("high_pass_filter", 150))
+            put("noise_gate", settingsPrefs.getFloat("noise_gate", 0.30f).toDouble())
+            put("show_full_spectrum", settingsPrefs.getBoolean("show_full_spectrum", false))
+        }
+        
+        // Save profile
+        profilePrefs.edit().putString(sanitizedName, profileData.toString()).apply()
+        
+        // Update profile list
+        val profileList = profilePrefs.getStringSet("profile_list", mutableSetOf()) ?: mutableSetOf()
+        profileList.add(sanitizedName)
+        profilePrefs.edit().putStringSet("profile_list", profileList).apply()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+fun loadProfile(context: Context, profileName: String, settingsPrefs: android.content.SharedPreferences) {
+    try {
+        val profilePrefs = context.getSharedPreferences("lyretune_profiles", Context.MODE_PRIVATE)
+        val profileDataString = profilePrefs.getString(profileName, null) ?: return
+        val profileData = JSONObject(profileDataString)
+        
+        // Load all settings
+        with(settingsPrefs.edit()) {
+            putInt("scale_type", profileData.optInt("scale_type", 0))
+            putInt("mode", profileData.optInt("mode", 4))
+            putInt("genus", profileData.optInt("genus", 0))
+            putString("first_note", profileData.optString("first_note", "E"))
+            putInt("num_strings", profileData.optInt("num_strings", 7))
+            putInt("temperament", profileData.optInt("temperament", 2))
+            putInt("octave_offset", profileData.optInt("octave_offset", 0))
+            putInt("fft_resolution", profileData.optInt("fft_resolution", 3))
+            putInt("magnitude_scale", profileData.optInt("magnitude_scale", 1))
+            putInt("tolerance", profileData.optInt("tolerance", 3))
+            putInt("high_pass_filter", profileData.optInt("high_pass_filter", 150))
+            putFloat("noise_gate", profileData.optDouble("noise_gate", 0.30).toFloat())
+            putBoolean("show_full_spectrum", profileData.optBoolean("show_full_spectrum", false))
+            apply()
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+fun deleteProfile(context: Context, profileName: String) {
+    try {
+        val profilePrefs = context.getSharedPreferences("lyretune_profiles", Context.MODE_PRIVATE)
+        
+        // Remove profile data
+        profilePrefs.edit().remove(profileName).apply()
+        
+        // Update profile list
+        val profileList = profilePrefs.getStringSet("profile_list", mutableSetOf()) ?: mutableSetOf()
+        profileList.remove(profileName)
+        profilePrefs.edit().putStringSet("profile_list", profileList).apply()
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+fun loadProfileList(context: Context): List<String> {
+    return try {
+        val profilePrefs = context.getSharedPreferences("lyretune_profiles", Context.MODE_PRIVATE)
+        val profileSet = profilePrefs.getStringSet("profile_list", emptySet()) ?: emptySet()
+        profileSet.sorted()
+    } catch (e: Exception) {
+        e.printStackTrace()
+        emptyList()
     }
 }
