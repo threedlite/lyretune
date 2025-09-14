@@ -157,8 +157,11 @@ class AudioManager: ObservableObject {
     @Published var detectedNote: String = "--"
     @Published var cents: Double = 0
     @Published var sampleRate: Double = 48000
+    @Published var isPlayingNotes = false
 
     private let audioEngine = AVAudioEngine()
+    private let playbackEngine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
     private let fftSize = 16384  // Android default: "Very High"
     private var fftSetup: FFTSetup?
     private var window: [Float] = []
@@ -166,6 +169,7 @@ class AudioManager: ObservableObject {
     init() {
         setupFFT()
         setupAudio()
+        setupPlaybackEngine()
     }
 
     private func setupFFT() {
@@ -368,6 +372,138 @@ class AudioManager: ObservableObject {
     func stopRecording() {
         audioEngine.stop()
         isRecording = false
+    }
+
+    // MARK: - Audio Playback
+
+    private func setupPlaybackEngine() {
+        // Attach the player node to the playback engine
+        playbackEngine.attach(playerNode)
+
+        // Get the output format (usually 2 channels at 48000 Hz)
+        let outputFormat = playbackEngine.outputNode.outputFormat(forBus: 0)
+
+        // Create a mono format for our generated tones
+        guard let monoFormat = AVAudioFormat(standardFormatWithSampleRate: outputFormat.sampleRate, channels: 1) else {
+            print("Failed to create mono format")
+            return
+        }
+
+        // Connect player to mixer with mono format
+        playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: monoFormat)
+
+        // Start the playback engine
+        do {
+            try playbackEngine.start()
+            print("Playback engine started successfully")
+        } catch {
+            print("Failed to start playback engine: \(error)")
+        }
+    }
+
+    func playHighlightedNotes(stringFrequencies: [Double]) {
+        guard !isPlayingNotes else { return }
+
+        // Ensure playback engine is running
+        if !playbackEngine.isRunning {
+            do {
+                try playbackEngine.start()
+            } catch {
+                print("Failed to restart playback engine: \(error)")
+                return
+            }
+        }
+
+        isPlayingNotes = true
+
+        // Play notes in sequence
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Start the player node
+            self.playerNode.play()
+
+            let sampleRate = 48000.0
+
+            // Play each string frequency in descending order (highest to lowest)
+            for (index, frequency) in stringFrequencies.enumerated().reversed() {
+                guard self.isPlayingNotes else {
+                    self.playerNode.stop()
+                    break
+                }
+
+                if frequency > 0 {
+                    print("Playing string \(index): \(frequency) Hz")
+                    self.playTone(frequency: frequency, duration: 1.0, sampleRate: sampleRate)
+                    Thread.sleep(forTimeInterval: 0.12) // Short pause between notes
+                }
+            }
+
+            self.playerNode.stop()
+
+            DispatchQueue.main.async {
+                self.isPlayingNotes = false
+            }
+        }
+    }
+
+    private func playTone(frequency: Double, duration: Double, sampleRate: Double) {
+        let numSamples = Int(sampleRate * duration)
+
+        // Create mono format
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            print("Failed to create audio format")
+            return
+        }
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(numSamples)) else {
+            print("Failed to create audio buffer")
+            return
+        }
+
+        buffer.frameLength = AVAudioFrameCount(numSamples)
+
+        // Get the buffer's audio channel data (mono - single channel)
+        guard let channelData = buffer.floatChannelData else {
+            print("Failed to get channel data")
+            return
+        }
+
+        // Generate lyre-like tone with harmonics and decay
+        for frame in 0..<numSamples {
+            let t = Double(frame) / sampleRate
+            let decayFactor = exp(-t * 0.8) // Exponential decay
+
+            // Fundamental frequency
+            let fundamental = sin(2.0 * .pi * frequency * t)
+
+            // Add harmonics to create lyre-like timbre
+            let harmonic2 = 0.6 * sin(2.0 * .pi * frequency * 2 * t)
+            let harmonic3 = 0.4 * sin(2.0 * .pi * frequency * 3 * t)
+            let harmonic4 = 0.2 * sin(2.0 * .pi * frequency * 4 * t)
+            let harmonic5 = 0.1 * sin(2.0 * .pi * frequency * 5 * t)
+
+            // Combine all harmonics
+            let sample = (fundamental + harmonic2 + harmonic3 + harmonic4 + harmonic5) * decayFactor
+
+            // Apply amplitude envelope - write to mono channel (channel 0 only)
+            let amplitude = Float(sample * 0.25) // Scale to prevent clipping
+            channelData[0][frame] = amplitude
+        }
+
+        // Use a semaphore to wait for buffer completion
+        let semaphore = DispatchSemaphore(value: 0)
+
+        // Schedule and play the buffer
+        playerNode.scheduleBuffer(buffer, at: nil, options: []) {
+            semaphore.signal()
+        }
+
+        // Wait for buffer to finish
+        _ = semaphore.wait(timeout: .now() + duration + 0.1)
+    }
+
+    func stopPlayingNotes() {
+        isPlayingNotes = false
+        playerNode.stop()
     }
 }
 
@@ -590,6 +726,11 @@ struct FFTVisualizationView: View {
                     let frequency = Double(index) * binToFreq
                     let yPos = frequencyToYPosition(frequency, height: geometry.size.height)
 
+                    // Calculate bar height to touch neighbors
+                    let nextFrequency = Double(index + 1) * binToFreq
+                    let nextYPos = frequencyToYPosition(nextFrequency, height: geometry.size.height)
+                    let barHeight = abs(yPos - nextYPos) + 1  // +1 to ensure overlap
+
                     // Always show a bar, even if magnitude is very small
                     let magnitude = fullSpectrum[index]
                     let barWidth = max(CGFloat(magnitude) * geometry.size.width * 0.8,
@@ -598,7 +739,7 @@ struct FFTVisualizationView: View {
                     if barWidth > 0 {
                         Rectangle()
                             .fill(Color.blue.opacity(Double(magnitude) * 0.7 + 0.3))
-                            .frame(width: barWidth, height: 1)  // Thin bars to see more detail
+                            .frame(width: barWidth, height: barHeight)  // Height based on distance to next bar
                             .position(x: barWidth / 2, y: yPos)
                     }
                 }
@@ -727,6 +868,26 @@ struct MainView: View {
 
                         Spacer()
 
+                        // Play button
+                        Button(action: {
+                            if audioManager.isPlayingNotes {
+                                audioManager.stopPlayingNotes()
+                            } else {
+                                audioManager.playHighlightedNotes(stringFrequencies: stringFrequencies)
+                            }
+                        }) {
+                            ZStack {
+                                Circle()
+                                    .fill(audioManager.isPlayingNotes ? Color.orange : Color.blue)
+                                    .frame(width: 50, height: 50)
+
+                                Image(systemName: audioManager.isPlayingNotes ? "stop.fill" : "play.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                        .padding(.trailing, 8)
+
                         Button(action: { showingSettings = true }) {
                             Image(systemName: "gearshape.fill")
                                 .font(.title2)
@@ -763,20 +924,6 @@ struct MainView: View {
                     .padding()
 
                     Spacer()
-
-                    // Control button
-                    Button(action: toggleRecording) {
-                        ZStack {
-                            Circle()
-                                .fill(audioManager.isRecording ? Color.red : Color.green)
-                                .frame(width: 80, height: 80)
-
-                            Image(systemName: audioManager.isRecording ? "stop.fill" : "mic.fill")
-                                .font(.system(size: 30))
-                                .foregroundColor(.white)
-                        }
-                    }
-                    .padding(.bottom, 30)
                 }
             }
             .navigationBarHidden(true)
@@ -796,13 +943,6 @@ struct MainView: View {
         }
     }
 
-    private func toggleRecording() {
-        if audioManager.isRecording {
-            audioManager.stopRecording()
-        } else {
-            audioManager.startRecording()
-        }
-    }
 
     private func updateStringFrequencies() {
         stringFrequencies = settings.calculateFrequencies()
@@ -852,6 +992,169 @@ struct MainView: View {
 }
 
 
+// MARK: - Transposition Playback Manager
+
+class TranspositionPlaybackManager: ObservableObject {
+    @Published var isPlaying = false
+    private let playbackEngine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    private var playbackTask: Task<Void, Never>?
+
+    init() {
+        setupPlaybackEngine()
+    }
+
+    private func setupPlaybackEngine() {
+        playbackEngine.attach(playerNode)
+
+        let outputFormat = playbackEngine.outputNode.outputFormat(forBus: 0)
+        guard let monoFormat = AVAudioFormat(standardFormatWithSampleRate: outputFormat.sampleRate, channels: 1) else {
+            print("Failed to create mono format")
+            return
+        }
+
+        playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: monoFormat)
+
+        do {
+            try playbackEngine.start()
+            print("Transposition playback engine started")
+        } catch {
+            print("Failed to start transposition playback engine: \(error)")
+        }
+    }
+
+    func playNotes(_ notesString: String) {
+        guard !isPlaying else { return }
+
+        // Parse notes
+        let notes = notesString.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+        guard !notes.isEmpty else { return }
+
+        isPlaying = true
+
+        // Cancel any existing playback
+        playbackTask?.cancel()
+
+        // Start new playback task
+        playbackTask = Task {
+            await playNotesAsync(notes)
+        }
+    }
+
+    private func playNotesAsync(_ notes: [String]) async {
+        // Ensure engine is running
+        if !playbackEngine.isRunning {
+            do {
+                try playbackEngine.start()
+            } catch {
+                print("Failed to restart playback engine: \(error)")
+                await MainActor.run { self.isPlaying = false }
+                return
+            }
+        }
+
+        playerNode.play()
+
+        let sampleRate = 44100.0
+        let noteDuration = 0.4  // 400ms per note
+        let pauseDuration = 0.05  // 50ms pause between notes
+
+        for note in notes {
+            guard !Task.isCancelled else {
+                playerNode.stop()
+                await MainActor.run { self.isPlaying = false }
+                return
+            }
+
+            let frequency = noteToFrequency(note)
+            if frequency > 0 && frequency < 20000 {  // Sanity check
+                playTone(frequency: frequency, duration: noteDuration, sampleRate: sampleRate)
+                try? await Task.sleep(nanoseconds: UInt64(pauseDuration * 1_000_000_000))
+            }
+        }
+
+        playerNode.stop()
+        await MainActor.run { self.isPlaying = false }
+    }
+
+    private func playTone(frequency: Double, duration: Double, sampleRate: Double) {
+        let numSamples = Int(sampleRate * duration)
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            return
+        }
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(numSamples)) else {
+            return
+        }
+
+        buffer.frameLength = AVAudioFrameCount(numSamples)
+
+        guard let channelData = buffer.floatChannelData else { return }
+
+        // Generate simple tone with envelope
+        for frame in 0..<numSamples {
+            let t = Double(frame) / sampleRate
+
+            // Simple envelope for smoother sound
+            let attack = min(t / 0.01, 1.0)  // 10ms attack
+            let release = max(0, min(1.0, (duration - t) / 0.01))  // 10ms release
+            let envelope = attack * release
+
+            // Generate tone
+            let sample = sin(2.0 * .pi * frequency * t) * envelope
+            channelData[0][frame] = Float(sample * 0.3)  // Scale to prevent clipping
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+
+        playerNode.scheduleBuffer(buffer, at: nil, options: []) {
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + duration + 0.1)
+    }
+
+    private func noteToFrequency(_ note: String) -> Double {
+        // Parse note (e.g., "C#4", "Bb3", "F5")
+        let pattern = "^([A-G])([#b]*)([0-9])$"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: note, range: NSRange(note.startIndex..., in: note)) else {
+            return 0
+        }
+
+        let noteNameRange = Range(match.range(at: 1), in: note)!
+        let accidentalRange = Range(match.range(at: 2), in: note)!
+        let octaveRange = Range(match.range(at: 3), in: note)!
+
+        let noteName = String(note[noteNameRange])
+        let accidental = String(note[accidentalRange])
+        let octave = Int(note[octaveRange])!
+
+        // Note to semitone mapping (C = 0)
+        let noteValues = ["C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11]
+        guard var semitone = noteValues[noteName] else { return 0 }
+
+        // Apply accidentals
+        for char in accidental {
+            if char == "#" { semitone += 1 }
+            else if char == "b" { semitone -= 1 }
+        }
+
+        // Calculate MIDI note number (A4 = 69)
+        let midiNote = (octave + 1) * 12 + semitone
+
+        // Convert to frequency (A4 = 440 Hz)
+        return 440.0 * pow(2.0, Double(midiNote - 69) / 12.0)
+    }
+
+    func stopPlayback() {
+        playbackTask?.cancel()
+        playerNode.stop()
+        isPlaying = false
+    }
+}
+
 // MARK: - Transposition Tool View
 
 struct TranspositionToolView: View {
@@ -860,6 +1163,8 @@ struct TranspositionToolView: View {
     @State private var transpositionAmount: Double = 0
     @State private var outputText = ""
     @State private var uniqueNotes = ""
+    @State private var isPlaying = false
+    @StateObject private var playbackManager = TranspositionPlaybackManager()
 
     var body: some View {
         NavigationView {
@@ -956,6 +1261,23 @@ struct TranspositionToolView: View {
             }
             .navigationTitle("Transposition Tool")
             .navigationBarItems(
+                leading: Button(action: {
+                    if playbackManager.isPlaying {
+                        playbackManager.stopPlayback()
+                    } else {
+                        playbackManager.playNotes(outputText)
+                    }
+                }) {
+                    ZStack {
+                        Circle()
+                            .fill(playbackManager.isPlaying ? Color.orange : Color.blue)
+                            .frame(width: 44, height: 44)
+
+                        Image(systemName: playbackManager.isPlaying ? "stop.fill" : "play.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                    }
+                },
                 trailing: Button("Done") {
                     presentationMode.wrappedValue.dismiss()
                 }
@@ -1076,8 +1398,27 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationView {
-            Form {
-                // Profile Management Section
+            VStack(spacing: 0) {
+                // Transposition Tool Button at top
+                Button(action: {
+                    showingTranspositionTool = true
+                }) {
+                    HStack {
+                        Image(systemName: "music.note.list")
+                            .font(.system(size: 20))
+                        Text("Transposition Tool")
+                            .font(.headline)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.blue)
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                }
+
+                Form {
+                    // Profile Management Section
                 Section(header: Text("Profile Management")) {
                     HStack {
                         TextField("Profile Name", text: $newProfileName)
@@ -1224,33 +1565,18 @@ struct SettingsView: View {
                     }
                 }
 
-                // Tools Section
-                Section(header: Text("Tools")) {
-                    Button(action: {
-                        showingTranspositionTool = true
-                    }) {
-                        HStack {
-                            Image(systemName: "music.note.list")
-                            Text("Transposition Tool")
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .foregroundColor(.gray)
-                        }
-                    }
-                    .foregroundColor(.primary)
-                }
-
                 // License Section
                 Section(header: Text("About")) {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0.0")
+                        Text("3.0.8")
                             .foregroundColor(.secondary)
                     }
 
                     Link("View License", destination: URL(string: "https://github.com/threedlite/lyretune/blob/main/LICENSE.txt")!)
                         .foregroundColor(.blue)
+                }
                 }
             }
             .navigationTitle("Settings")
