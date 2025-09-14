@@ -9,7 +9,7 @@ Port the Android LyreTune app to iOS, maintaining feature parity while following
 - **Real-time microphone input** using AVAudioEngine
 - **FFT analysis** using Accelerate framework (vDSP)
 - **Sample rate**: 48000 Hz
-- **FFT size**: 4096 samples (configurable)
+- **FFT size**: (configurable)
 - **High-pass filter**: 150 Hz default (configurable)
 - **Noise gate**: 2% threshold (configurable)
 

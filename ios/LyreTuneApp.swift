@@ -42,22 +42,31 @@ enum Mode: String, CaseIterable {
     case hypolydios = "Hypolydios"
     case hypophrygios = "Hypophrygios"
 
-    var intervals: [Double] {
+    // Ancient Greek modes mapped to their modern equivalents
+    // The pattern represents the notes in the scale
+    var notePattern: [String] {
         switch self {
         case .mixolydios:
-            return [1.0, 9.0/8, 5.0/4, 4.0/3, 3.0/2, 5.0/3, 15.0/8]
+            // Ancient Mixolydios = Modern Locrian (B C D E F G A)
+            return ["B", "C", "D", "E", "F", "G", "A"]
         case .hypodorios:
-            return [1.0, 9.0/8, 6.0/5, 4.0/3, 3.0/2, 8.0/5, 16.0/9]
+            // Ancient Hypodorios = Modern Aeolian (A B C D E F G)
+            return ["A", "B", "C", "D", "E", "F", "G"]
         case .lydios:
-            return [1.0, 9.0/8, 81.0/64, 4.0/3, 3.0/2, 27.0/16, 243.0/128]
+            // Ancient Lydios = Modern Ionian (C D E F G A B)
+            return ["C", "D", "E", "F", "G", "A", "B"]
         case .phrygios:
-            return [1.0, 256.0/243, 32.0/27, 4.0/3, 3.0/2, 128.0/81, 16.0/9]
+            // Ancient Phrygios = Modern Dorian (D E F G A B C)
+            return ["D", "E", "F", "G", "A", "B", "C"]
         case .dorios:
-            return [1.0, 9.0/8, 32.0/27, 4.0/3, 3.0/2, 27.0/16, 16.0/9]
+            // Ancient Dorios = Modern Phrygian (E F G A B C D)
+            return ["E", "F", "G", "A", "B", "C", "D"]
         case .hypolydios:
-            return [1.0, 9.0/8, 5.0/4, 45.0/32, 3.0/2, 5.0/3, 15.0/8]
+            // Ancient Hypolydios = Modern Mixolydian (G A B C D E F)
+            return ["G", "A", "B", "C", "D", "E", "F"]
         case .hypophrygios:
-            return [1.0, 16.0/15, 6.0/5, 4.0/3, 3.0/2, 8.0/5, 9.0/5]
+            // Ancient Hypophrygios = Modern Lydian (F G A B C D E)
+            return ["F", "G", "A", "B", "C", "D", "E"]
         }
     }
 
@@ -91,17 +100,6 @@ enum Genus: String, CaseIterable {
     case diatonic = "Diatonic"
     case chromatic = "Chromatic"
     case enharmonic = "Enharmonic"
-
-    var intervals: [Double] {
-        switch self {
-        case .diatonic:
-            return [1.0, 9.0/8, 32.0/27, 4.0/3, 3.0/2, 27.0/16, 16.0/9]
-        case .chromatic:
-            return [1.0, 256.0/243, 32.0/27, 4.0/3, 3.0/2, 128.0/81, 16.0/9]
-        case .enharmonic:
-            return [1.0, 256.0/243, 32.0/27, 4.0/3, 3.0/2, 128.0/81, 16.0/9]
-        }
-    }
 
     func toInt() -> Int {
         switch self {
@@ -165,6 +163,11 @@ class AudioManager: ObservableObject {
     private let fftSize = 16384  // Android default: "Very High"
     private var fftSetup: FFTSetup?
     private var window: [Float] = []
+
+    // Settings from SettingsManager
+    var highPassFilter: Int = 150
+    var noiseGate: Float = 0.30
+    var tolerance: Int = 3
 
     init() {
         setupFFT()
@@ -273,7 +276,7 @@ class AudioManager: ObservableObject {
                 var magnitudes = [Float](repeating: 0, count: fftSize/2)
                 vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize/2))
 
-                // Normalize full spectrum for display (like Android)
+                // Find max magnitude for normalization
                 var maxMagnitude: Float = 0
                 for mag in magnitudes {
                     if mag > maxMagnitude {
@@ -281,15 +284,23 @@ class AudioManager: ObservableObject {
                     }
                 }
 
+                // Apply noise gate - if signal is too weak, ignore it
+                let noiseThreshold = maxMagnitude * self.noiseGate
+
                 var normalizedFullSpectrum = [Float](repeating: 0, count: fftSize/2)
                 if maxMagnitude > 0 {
-                    let highPassBin = Int(150.0 * Double(fftSize) / self.sampleRate) // 150 Hz high-pass
+                    let highPassBin = Int(Double(self.highPassFilter) * Double(fftSize) / self.sampleRate) // Use settings high-pass
                     for i in 0..<fftSize/2 {
                         // Apply high-pass filter
                         if i < highPassBin {
                             normalizedFullSpectrum[i] = 0
                         } else {
-                            normalizedFullSpectrum[i] = magnitudes[i] / maxMagnitude
+                            // Apply noise gate
+                            if magnitudes[i] < noiseThreshold {
+                                normalizedFullSpectrum[i] = 0
+                            } else {
+                                normalizedFullSpectrum[i] = magnitudes[i] / maxMagnitude
+                            }
                         }
                     }
                 }
@@ -309,15 +320,35 @@ class AudioManager: ObservableObject {
                     }
                 }
 
-                // Find dominant frequency
-                if let maxIndex = magnitudes.enumerated().max(by: { $0.element < $1.element })?.offset {
-                    let freq = Double(maxIndex) * self.sampleRate / Double(self.fftSize)
+                // Find dominant frequency (considering high-pass filter and noise gate)
+                let highPassBin = Int(Double(self.highPassFilter) * Double(fftSize) / self.sampleRate)
+                var maxMagnitudeIndex = -1
+                var maxMagnitudeValue: Float = 0
+
+                for i in highPassBin..<magnitudes.count {
+                    if magnitudes[i] > maxMagnitudeValue && magnitudes[i] >= noiseThreshold {
+                        maxMagnitudeValue = magnitudes[i]
+                        maxMagnitudeIndex = i
+                    }
+                }
+
+                if maxMagnitudeIndex > 0 {
+                    let freq = Double(maxMagnitudeIndex) * self.sampleRate / Double(self.fftSize)
 
                     DispatchQueue.main.async {
                         self.spectrum = normalizedMagnitudes
                         self.fullSpectrum = normalizedFullSpectrum
                         self.dominantFrequency = freq
                         self.updateDetectedNote(frequency: freq)
+                    }
+                } else {
+                    // No valid frequency detected (below noise gate)
+                    DispatchQueue.main.async {
+                        self.spectrum = normalizedMagnitudes
+                        self.fullSpectrum = normalizedFullSpectrum
+                        self.dominantFrequency = 0
+                        self.detectedNote = "--"
+                        self.cents = 0
                     }
                 }
             }
@@ -331,15 +362,29 @@ class AudioManager: ObservableObject {
             return
         }
 
+        // Note names in chromatic order starting from C
         let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
         let a4Frequency = 440.0
 
+        // Calculate semitones from A4
         let semitonesFromA4 = 12.0 * log2(frequency / a4Frequency)
         let nearestSemitone = round(semitonesFromA4)
         cents = (semitonesFromA4 - nearestSemitone) * 100.0
 
-        let noteIndex = (Int(nearestSemitone) + 57) % 12
-        let octave = 4 + Int(nearestSemitone + 0.5) / 12
+        // A4 is the 9th note of octave 4 (C4=0, C#4=1...A4=9)
+        // So A4 is 4*12 + 9 = 57 semitones from C0
+        // Therefore, frequency is (57 + nearestSemitone) semitones from C0
+        let semitonesFromC0 = 57 + Int(nearestSemitone)
+
+        // Calculate octave and note index
+        var octave = semitonesFromC0 / 12
+        var noteIndex = semitonesFromC0 % 12
+
+        // Handle negative values
+        if semitonesFromC0 < 0 {
+            octave = (semitonesFromC0 - 11) / 12
+            noteIndex = ((semitonesFromC0 % 12) + 12) % 12
+        }
 
         detectedNote = "\(noteNames[noteIndex])\(octave)"
     }
@@ -401,7 +446,7 @@ class AudioManager: ObservableObject {
         }
     }
 
-    func playHighlightedNotes(stringFrequencies: [Double]) {
+    func playHighlightedNotes(stringFrequencies: [Double], stringNotes: [String]) {
         guard !isPlayingNotes else { return }
 
         // Ensure playback engine is running
@@ -421,7 +466,10 @@ class AudioManager: ObservableObject {
             // Start the player node
             self.playerNode.play()
 
-            let sampleRate = 48000.0
+            // Use the actual output format sample rate to ensure correct pitch
+            let outputFormat = self.playbackEngine.outputNode.outputFormat(forBus: 0)
+            let sampleRate = outputFormat.sampleRate
+            print("Playback using sample rate: \(sampleRate) Hz")
 
             // Play each string frequency in descending order (highest to lowest)
             for (index, frequency) in stringFrequencies.enumerated().reversed() {
@@ -431,7 +479,26 @@ class AudioManager: ObservableObject {
                 }
 
                 if frequency > 0 {
-                    print("Playing string \(index): \(frequency) Hz")
+                    // Make sure we're getting the right note for this index
+                    let note = index < stringNotes.count ? stringNotes[index] : "?"
+                    print("\n=== Playing String \(index) ===")
+                    print("Display shows: \(note)")
+                    print("Frequency: \(frequency) Hz")
+
+                    // Verify what note this frequency should be
+                    let a4 = 440.0
+                    let semitones = 12.0 * log2(frequency / a4)
+                    print("Semitones from A4: \(semitones)")
+
+                    // Calculate what note this frequency actually represents
+                    let testNote = self.testDetectedNote(frequency: frequency)
+                    print("This frequency is actually: \(testNote)")
+
+                    if testNote != note {
+                        print("ERROR: Frequency doesn't match note!")
+                        print("  Display shows \(note) but frequency \(frequency) Hz is \(testNote)")
+                    }
+
                     self.playTone(frequency: frequency, duration: 1.0, sampleRate: sampleRate)
                     Thread.sleep(forTimeInterval: 0.12) // Short pause between notes
                 }
@@ -505,6 +572,38 @@ class AudioManager: ObservableObject {
         isPlayingNotes = false
         playerNode.stop()
     }
+
+    // Test function to see what updateDetectedNote would produce
+    private func testDetectedNote(frequency: Double) -> String {
+        guard frequency > 0 else {
+            return "--"
+        }
+
+        // Note names in chromatic order starting from C
+        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let a4Frequency = 440.0
+
+        // Calculate semitones from A4
+        let semitonesFromA4 = 12.0 * log2(frequency / a4Frequency)
+        let nearestSemitone = round(semitonesFromA4)
+
+        // A4 is the 9th note of octave 4 (C4=0, C#4=1...A4=9)
+        // So A4 is 4*12 + 9 = 57 semitones from C0
+        // Therefore, frequency is (57 + nearestSemitone) semitones from C0
+        let semitonesFromC0 = 57 + Int(nearestSemitone)
+
+        // Calculate octave and note index
+        var octave = semitonesFromC0 / 12
+        var noteIndex = semitonesFromC0 % 12
+
+        // Handle negative values
+        if semitonesFromC0 < 0 {
+            octave = (semitonesFromC0 - 11) / 12
+            noteIndex = ((semitonesFromC0 % 12) + 12) % 12
+        }
+
+        return "\(noteNames[noteIndex])\(octave)"
+    }
 }
 
 // MARK: - Profile Management
@@ -550,6 +649,43 @@ class SettingsManager: ObservableObject {
 
     init() {
         loadProfiles()
+        // Test frequency calculation
+        testFrequencyCalculation()
+    }
+
+    private func testFrequencyCalculation() {
+        // Test frequency calculation - these should match standard frequencies
+        print("\n=== FREQUENCY CALCULATION TEST ===")
+
+        // Test known frequencies
+        let tests = [
+            ("C4", "C", 4, 261.63),
+            ("D4", "D", 4, 293.66),
+            ("E4", "E", 4, 329.63),
+            ("F4", "F", 4, 349.23),
+            ("G4", "G", 4, 392.00),
+            ("A4", "A", 4, 440.00),
+            ("B4", "B", 4, 493.88)
+        ]
+
+        for (name, note, octave, expected) in tests {
+            let calculated = noteToFrequency(note: note, octave: octave, temperament: .equal)
+            let diff = abs(calculated - expected)
+            if diff > 1.0 {
+                print("ERROR: \(name) = \(calculated) Hz (expected \(expected) Hz, diff=\(diff))")
+            } else {
+                print("OK: \(name) = \(calculated) Hz")
+            }
+        }
+
+        // Now test Dorios mode starting at E4
+        print("\n=== DORIOS MODE TEST (E4 start) ===")
+        let doriosNotes = ["E", "F", "G", "A", "B", "C", "D"]
+        for (index, note) in doriosNotes.enumerated() {
+            let octave = (note == "C" || note == "D") ? 5 : 4  // C and D are in next octave
+            let freq = noteToFrequency(note: note, octave: octave, temperament: .equal)
+            print("String \(index): \(note)\(octave) = \(freq) Hz")
+        }
     }
 
     func saveProfile(name: String) {
@@ -621,67 +757,288 @@ class SettingsManager: ObservableObject {
         }
     }
 
-    func calculateFrequencies() -> [Double] {
-        let baseFrequency = 440.0
-        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-
-        guard let noteIndex = noteNames.firstIndex(of: firstNote) else {
-            return []
-        }
-
-        // Calculate base octave (E3 is default, like Android)
-        let baseOctave = 3 + octaveOffset
-        let semitonesFromA4 = (baseOctave - 4) * 12 + (noteIndex - 9)
-        let rootFrequency = baseFrequency * pow(2.0, Double(semitonesFromA4) / 12.0)
-
-        var frequencies: [Double] = []
-
-        // Get intervals based on scale type
-        let intervals: [Double]
-        switch scaleTypeCategory {
-        case .modes:
-            intervals = selectedMode.intervals
-        case .genres:
-            intervals = selectedGenus.intervals
-        case .pentatonic:
-            intervals = [1.0, 9.0/8, 5.0/4, 3.0/2, 5.0/3] // Pentatonic scale
-        case .doubleHarmonic:
-            intervals = [1.0, 17.0/16, 5.0/4, 4.0/3, 3.0/2, 8.0/5, 15.0/8] // Double Harmonic
-        case .phorminx:
-            intervals = [1.0, 9.0/8, 5.0/4, 4.0/3] // Phorminx (4 strings)
-        }
-
-        for stringIndex in 0..<numberOfStrings {
-            let octaveOffset = stringIndex / intervals.count
-            let intervalIndex = stringIndex % intervals.count
-            var frequency = rootFrequency * intervals[intervalIndex] * pow(2.0, Double(octaveOffset))
-
-            // Apply temperament adjustment
-            frequency = applyTemperament(frequency, stringIndex: stringIndex)
-
-            frequencies.append(frequency)
-        }
-
-        return frequencies
+    // Structure to hold both notes and frequencies (like Android's ScaleData)
+    struct ScaleData {
+        let notes: [String]
+        let frequencies: [Double]
     }
 
-    private func applyTemperament(_ frequency: Double, stringIndex: Int) -> Double {
+    func calculateScale() -> ScaleData {
+        // Get the scale notes based on scale type
+        let scaleNotes: [String]
+        switch scaleTypeCategory {
+        case .modes:
+            // Get mode pattern and transpose to first note
+            let basePattern = selectedMode.notePattern
+            scaleNotes = transposeScale(basePattern, from: basePattern[0], to: firstNote)
+        case .genres:
+            scaleNotes = getGenusScale(selectedGenus, firstNote: firstNote)
+        case .pentatonic:
+            scaleNotes = getPentatonicScale(firstNote: firstNote)
+        case .doubleHarmonic:
+            scaleNotes = getDoubleHarmonicScale(firstNote: firstNote)
+        case .phorminx:
+            scaleNotes = getPhorminxScale(firstNote: firstNote)
+        }
+
+        // Calculate frequencies with octave handling (matching Android logic)
+        var notesWithOctaves: [String] = []
+        var frequencies: [Double] = []
+        var lastFrequency: Double = 0
+
+        for stringIndex in 0..<numberOfStrings {
+            let noteIndex = stringIndex % scaleNotes.count
+            let note = scaleNotes[noteIndex]
+
+            // Calculate base octave from scale cycle position
+            let baseCycleOctave = stringIndex / scaleNotes.count
+            var stringOctave = octaveOffset + 4 + baseCycleOctave
+
+            // Calculate frequency for this note
+            var frequency = noteToFrequency(note: note, octave: stringOctave, temperament: temperament)
+
+            // Ensure frequencies are ascending
+            if stringIndex > 0 && frequency <= lastFrequency {
+                while frequency <= lastFrequency && stringOctave < 10 {
+                    stringOctave += 1
+                    frequency = noteToFrequency(note: note, octave: stringOctave, temperament: temperament)
+                }
+            }
+
+            // Store note with octave (like Android's noteWithOctave)
+            let noteWithOctave = "\(note)\(stringOctave)"
+            notesWithOctaves.append(noteWithOctave)
+            frequencies.append(frequency)
+            lastFrequency = frequency
+        }
+
+        return ScaleData(notes: notesWithOctaves, frequencies: frequencies)
+    }
+
+    // Helper function to transpose scale from one note to another
+    private func transposeScale(_ scale: [String], from fromNote: String, to toNote: String) -> [String] {
+        // If no transposition needed, return as is
+        if fromNote == toNote {
+            return scale
+        }
+
+        // Calculate semitone difference
+        let noteOrder = ["C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5,
+                        "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11]
+        let chromatic = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
+        guard let fromIndex = noteOrder[fromNote],
+              let toIndex = noteOrder[toNote] else {
+            return scale
+        }
+
+        let interval = (toIndex - fromIndex + 12) % 12
+
+        return scale.map { note in
+            guard let noteIndex = noteOrder[note] else { return note }
+            let newIndex = (noteIndex + interval) % 12
+            return chromatic[newIndex]
+        }
+    }
+
+    // Get genus scale for the given first note
+    private func getGenusScale(_ genus: Genus, firstNote: String) -> [String] {
+        // These are the predefined scales from Android
+        let scales: [Genus: [String: String]] = [
+            .diatonic: [
+                "C": "C Db Eb F Gb Ab Bb B Db Eb E F# G# A B C# D E F# G A B C D",
+                "D": "D Eb F G Ab Bb C Db Eb F Gb Ab Bb B Db Eb E F# G# A B C# D E",
+                "E": "E F G A Bb C D Eb F G Ab Bb C Db Eb F Gb Ab Bb B Db Eb E F#",
+                "F": "F Gb Ab Bb B Db Eb E F# G# A B C# D E F# G A B C D E F G",
+                "G": "G Ab Bb C Db Eb F Gb Ab Bb B Db Eb E F# G# A B C# D E F# G A",
+                "A": "A Bb C D Eb F G Ab Bb C Db Eb F Gb Ab Bb B Db Eb E F# G A B",
+                "B": "B C D E F G A Bb C D Eb F G Ab Bb C Db Eb F Gb Ab Bb B Db"
+            ],
+            .chromatic: [
+                "C": "C C# D F F# G Bb B C Eb E F Ab A Bb Db D D# F# G G# B C C#",
+                "D": "D D# E G G# A C C# D F F# G Bb B C Eb E F Ab A Bb Db D D#",
+                "E": "E F F# A Bb B D D# E G G# A C C# D F F# G Bb B C Eb E F",
+                "F": "F F# G Bb B C Eb E F Ab A Bb B D D# E G G# A C C# D F F#",
+                "G": "G G# A C C# D F F# G Bb B C Eb E F Ab A Bb Db D D# F# G G#",
+                "A": "A Bb B D D# E G G# A C C# D F F# G Bb B C Eb E F Ab A Bb",
+                "B": "B C C# E F F# A Bb B D D# E G G# A C C# D F F# G Bb B C"
+            ],
+            .enharmonic: [
+                "C": "C C* C# F F* F# A# A#* B D# D#* E G# G#* A C# C#* D F# F#* G B B* C",
+                "D": "D D* D#* G G* G#* C C* C# F F* F# A# A#* B D# D#* E G# G#* A C# C#* D",
+                "E": "E E* F A A* A# D D* D#* G G* G#* C C* C# F F* F# A# A#* B D# D#* E",
+                "F": "F F* F# A# A#* B D# D#* E G# G#* A C# C#* D F# F#* G B B* C E E* F",
+                "G": "G G* G#* C C* C# F F* F# A# A#* B D# D#* E G# G#* A C# C#* D F# F#* G",
+                "A": "A A* A# D D* D#* G G* G#* C C* C# F F* F# A# A#* B D# D#* E G# G#* A",
+                "B": "B B* C E E* F A A* A# D D* D#* G G* G#* C C* C# F F* F# A# A#* B"
+            ]
+        ]
+
+        // Try exact match first
+        if let scaleString = scales[genus]?[firstNote] {
+            return scaleString.components(separatedBy: " ")
+        }
+
+        // If no exact match, transpose from C
+        if let baseScaleString = scales[genus]?["C"] {
+            let baseScale = baseScaleString.components(separatedBy: " ")
+            return transposeScale(baseScale, from: "C", to: firstNote)
+        }
+
+        // Fallback to a simple scale
+        return ["C", "D", "E", "F", "G", "A", "B"]
+    }
+
+    // Get pentatonic scale
+    private func getPentatonicScale(firstNote: String) -> [String] {
+        let scales: [String: String] = [
+            "F": "F G Bb C D F G Bb C D F G Bb C D F G Bb C D F G Bb C",
+            "G": "G A C D E G A C D E G A C D E G A C D E G A C D",
+            "A": "A C D E G A C D E G A C D E G A C D E G A C D E",
+            "Bb": "Bb C D F G Bb C D F G Bb C D F G Bb C D F G Bb C D F",
+            "C": "C D E G A C D E G A C D E G A C D E G A C D E G",
+            "D": "D E G A C D E G A C D E G A C D E G A C D E G A",
+            "E": "E G A C D E G A C D E G A C D E G A C D E G A C"
+        ]
+
+        // Handle B note (becomes Bb)
+        let lookupNote = firstNote == "B" ? "Bb" : firstNote
+
+        if let scaleString = scales[lookupNote] {
+            return scaleString.components(separatedBy: " ")
+        }
+
+        // Transpose from F if no match
+        if let baseScaleString = scales["F"] {
+            let baseScale = baseScaleString.components(separatedBy: " ")
+            return transposeScale(baseScale, from: "F", to: lookupNote)
+        }
+
+        return ["C", "D", "E", "G", "A"]
+    }
+
+    // Get double harmonic scale
+    private func getDoubleHarmonicScale(firstNote: String) -> [String] {
+        let basePattern = ["C", "Db", "E", "F", "G", "Ab", "B"]
+        return transposeScale(basePattern, from: "C", to: firstNote)
+    }
+
+    // Get phorminx scale
+    private func getPhorminxScale(firstNote: String) -> [String] {
+        let basePattern = ["A", "B", "C", "E"]
+        return transposeScale(basePattern, from: "A", to: firstNote)
+    }
+
+    // Convert note to frequency using temperament
+    private func noteToFrequency(note: String, octave: Int, temperament: Temperament) -> Double {
+        let a4Freq: Double = 440.0
+
+        // Calculate semitones from A4
+        var semitones: Double = 0
+        switch note.prefix(1) {
+        case "C": semitones = -9
+        case "D": semitones = -7
+        case "E": semitones = -5
+        case "F": semitones = -4
+        case "G": semitones = -2
+        case "A": semitones = 0
+        case "B": semitones = 2
+        default: semitones = 0
+        }
+
+        // Handle sharps, flats, and quarter-tones
+        if note.contains("#") { semitones += 1 }
+        if note.contains("b") { semitones -= 1 }
+        if note.contains("*") { semitones += 0.5 }  // Quarter-tone
+
+        // Add octave offset
+        let totalSemitones = semitones + Double((octave - 4) * 12)
+
+        // Apply temperament
         switch temperament {
         case .equal:
-            return frequency
+            return a4Freq * pow(2.0, totalSemitones / 12.0)
         case .just:
-            // Just intonation ratios
-            let justRatios = [1.0, 25.0/24, 9.0/8, 6.0/5, 5.0/4, 4.0/3, 45.0/32, 3.0/2, 8.0/5, 5.0/3, 9.0/5, 15.0/8]
-            let ratio = justRatios[stringIndex % 12]
-            return frequency * ratio / pow(2.0, Double(stringIndex % 12) / 12.0)
+            return a4Freq * getJustRatio(totalSemitones)
         case .justAncient:
-            // Ancient just intonation
-            return frequency // Already applied in intervals
+            return a4Freq * getJustAncientRatio(totalSemitones)
         case .meantone:
-            // Meantone temperament
-            let meantoneRatios = [1.0, 1.07, 1.118, 1.196, 1.25, 1.337, 1.398, 1.495, 1.6, 1.672, 1.789, 1.869]
-            return frequency * meantoneRatios[stringIndex % 12]
+            return a4Freq * getMeantoneRatio(totalSemitones)
         }
+    }
+
+    // Just intonation ratios
+    private func getJustRatio(_ semitones: Double) -> Double {
+        // Handle quarter-tones with equal temperament
+        if semitones.truncatingRemainder(dividingBy: 1.0) != 0 {
+            return pow(2.0, semitones / 12.0)
+        }
+
+        let ratios: [Double] = [
+            1.0,      // A
+            16.0/15.0, // A#/Bb
+            9.0/8.0,   // B
+            6.0/5.0,   // C
+            5.0/4.0,   // C#/Db
+            4.0/3.0,   // D
+            45.0/32.0, // D#/Eb
+            3.0/2.0,   // E
+            8.0/5.0,   // F
+            5.0/3.0,   // F#/Gb
+            9.0/5.0,   // G
+            15.0/8.0   // G#/Ab
+        ]
+
+        let octaves = Int(floor(semitones / 12.0))
+        let noteIndex = Int((semitones.truncatingRemainder(dividingBy: 12.0) + 12.0).truncatingRemainder(dividingBy: 12.0))
+
+        return ratios[noteIndex] * pow(2.0, Double(octaves))
+    }
+
+    // Just Ancient temperament ratios (22 shruti system)
+    private func getJustAncientRatio(_ semitones: Double) -> Double {
+        let shrutiCents: [Double] = [
+            0.0, 22.0, 90.0, 112.0, 182.0, 204.0, 294.0, 316.0, 386.0, 408.0,
+            498.0, 520.0, 590.0, 612.0, 702.0, 722.0, 792.0, 814.0, 884.0, 906.0,
+            996.0, 1018.0, 1088.0, 1110.0
+        ]
+
+        let ratios = shrutiCents.map { cents in pow(2.0, cents / 1200.0) }
+
+        let octaves = Int(floor(semitones / 12.0))
+        let semitoneInOctave = semitones.truncatingRemainder(dividingBy: 12.0) + 12.0
+        let quarterTonesFromA = Int(round(semitoneInOctave.truncatingRemainder(dividingBy: 12.0) * 2.0))
+        let quarterToneIndex = quarterTonesFromA % 24
+
+        return ratios[quarterToneIndex] * pow(2.0, Double(octaves))
+    }
+
+    // Meantone temperament ratios
+    private func getMeantoneRatio(_ semitones: Double) -> Double {
+        // Handle quarter-tones with equal temperament
+        if semitones.truncatingRemainder(dividingBy: 1.0) != 0 {
+            return pow(2.0, semitones / 12.0)
+        }
+
+        let ratios: [Double] = [
+            1.0,        // A
+            1.0449,     // A#/Bb
+            1.1180,     // B
+            1.1963,     // C
+            1.2500,     // C#/Db
+            1.3375,     // D
+            1.3975,     // D#/Eb
+            1.4953,     // E
+            1.5625,     // F
+            1.6719,     // F#/Gb
+            1.7889,     // G
+            1.8692      // G#/Ab
+        ]
+
+        let octaves = Int(floor(semitones / 12.0))
+        let noteIndex = Int((semitones.truncatingRemainder(dividingBy: 12.0) + 12.0).truncatingRemainder(dividingBy: 12.0))
+
+        return ratios[noteIndex] * pow(2.0, Double(octaves))
     }
 
     func getFftSize() -> Int {
@@ -704,6 +1061,8 @@ struct FFTVisualizationView: View {
     let stringNotes: [String]
     let dominantFrequency: Double
     let showFullSpectrum: Bool
+    let tolerance: Int
+    let sampleRate: Double  // Add sample rate to ensure correct frequency calculation
 
     var body: some View {
         GeometryReader { geometry in
@@ -716,19 +1075,31 @@ struct FFTVisualizationView: View {
                 )
 
                 // FFT Bars - Display full spectrum data at correct frequencies (like Android)
-                let sampleRate = 48000.0
-                let binToFreq = sampleRate / 16384.0  // Each bin represents ~2.93 Hz (4x better resolution!)
-                let minBin = Int(50.0 / binToFreq)  // Start at 50 Hz
-                let maxBin = min(Int(2000.0 / binToFreq), fullSpectrum.count - 1)  // End at 2000 Hz
+                // Use the actual sample rate from the audio engine
+                let binToFreq = sampleRate / 16384.0  // Each bin represents frequency per FFT bin
 
-                // Display ALL bins in the visible range (should be about 167 bars)
+                // Calculate display range based on string frequencies
+                let sortedFreqs = stringFrequencies.sorted()
+                let minStringFreq = sortedFreqs.first ?? 100
+                let maxStringFreq = sortedFreqs.last ?? 1000
+                let range = maxStringFreq - minStringFreq
+                let padding = range * 0.2
+                let displayMinFreq = max(50.0, minStringFreq - padding)
+                let displayMaxFreq = min(2000.0, maxStringFreq + padding)
+
+                let minBin = Int(displayMinFreq / binToFreq)
+                let maxBin = min(Int(displayMaxFreq / binToFreq), fullSpectrum.count - 1)
+
+                // Display ALL bins in the visible range
                 ForEach(minBin...maxBin, id: \.self) { index in
                     let frequency = Double(index) * binToFreq
-                    let yPos = frequencyToYPosition(frequency, height: geometry.size.height)
+                    let yPos = frequencyToYPosition(frequency, height: geometry.size.height,
+                                                   minFreq: displayMinFreq, maxFreq: displayMaxFreq)
 
                     // Calculate bar height to touch neighbors
                     let nextFrequency = Double(index + 1) * binToFreq
-                    let nextYPos = frequencyToYPosition(nextFrequency, height: geometry.size.height)
+                    let nextYPos = frequencyToYPosition(nextFrequency, height: geometry.size.height,
+                                                        minFreq: displayMinFreq, maxFreq: displayMaxFreq)
                     let barHeight = abs(yPos - nextYPos) + 1  // +1 to ensure overlap
 
                     // Always show a bar, even if magnitude is very small
@@ -747,12 +1118,13 @@ struct FFTVisualizationView: View {
                 // String frequency lines with note labels
                 ForEach(Array(stringFrequencies.enumerated()), id: \.offset) { index, freq in
                     if index < stringNotes.count {
-                        let yPosition = frequencyToYPosition(freq, height: geometry.size.height)
+                        let yPosition = frequencyToYPosition(freq, height: geometry.size.height,
+                                                            minFreq: displayMinFreq, maxFreq: displayMaxFreq)
 
                         ZStack {
-                            // Frequency line
+                            // Frequency line - use tolerance from settings
                             Rectangle()
-                                .fill(isNearFrequency(freq, dominantFrequency) ? Color.green : Color.yellow.opacity(0.6))
+                                .fill(isNearFrequency(freq, dominantFrequency, tolerance: tolerance) ? Color.green : Color.yellow.opacity(0.6))
                                 .frame(width: geometry.size.width, height: 2)
                                 .position(x: geometry.size.width / 2, y: yPosition)
 
@@ -832,10 +1204,10 @@ struct FFTVisualizationView: View {
         return CGFloat(1.0 - normalized) * height
     }
 
-    private func isNearFrequency(_ target: Double, _ current: Double) -> Bool {
+    private func isNearFrequency(_ target: Double, _ current: Double, tolerance: Int = 3) -> Bool {
         guard current > 0 else { return false }
-        let cents = 1200.0 * log2(current / target)
-        return abs(cents) < 10
+        // Use Hz-based tolerance instead of cents for better precision at low frequencies
+        return abs(current - target) <= Double(tolerance)
     }
 }
 
@@ -846,6 +1218,7 @@ struct MainView: View {
     @StateObject private var settings = SettingsManager()
     @State private var showingSettings = false
     @State private var stringFrequencies: [Double] = []
+    @State private var stringNotes: [String] = []
 
     var body: some View {
         NavigationView {
@@ -873,7 +1246,7 @@ struct MainView: View {
                             if audioManager.isPlayingNotes {
                                 audioManager.stopPlayingNotes()
                             } else {
-                                audioManager.playHighlightedNotes(stringFrequencies: stringFrequencies)
+                                audioManager.playHighlightedNotes(stringFrequencies: stringFrequencies, stringNotes: stringNotes)
                             }
                         }) {
                             ZStack {
@@ -916,9 +1289,11 @@ struct MainView: View {
                         spectrum: audioManager.spectrum,
                         fullSpectrum: audioManager.fullSpectrum,
                         stringFrequencies: stringFrequencies,
-                        stringNotes: getStringNotes(),
+                        stringNotes: stringNotes,
                         dominantFrequency: audioManager.dominantFrequency,
-                        showFullSpectrum: settings.showFullSpectrum
+                        showFullSpectrum: settings.showFullSpectrum,
+                        tolerance: settings.tolerance,
+                        sampleRate: audioManager.sampleRate
                     )
                     .frame(height: 450)
                     .padding()
@@ -929,6 +1304,7 @@ struct MainView: View {
             .navigationBarHidden(true)
             .onAppear {
                 updateStringFrequencies()
+                updateAudioSettings()
                 // Delay audio start to avoid initialization issues
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     audioManager.startRecording()
@@ -938,6 +1314,7 @@ struct MainView: View {
                 SettingsView(settings: settings)
                     .onDisappear {
                         updateStringFrequencies()
+                        updateAudioSettings()
                     }
             }
         }
@@ -945,21 +1322,29 @@ struct MainView: View {
 
 
     private func updateStringFrequencies() {
-        stringFrequencies = settings.calculateFrequencies()
+        let scaleData = settings.calculateScale()
+        stringFrequencies = scaleData.frequencies
+        stringNotes = scaleData.notes
+    }
+
+    private func updateAudioSettings() {
+        audioManager.highPassFilter = settings.highPassFilter
+        audioManager.noiseGate = settings.noiseGate
+        audioManager.tolerance = settings.tolerance
     }
 
     private func getSubtitleText() -> String {
         switch settings.scaleTypeCategory {
         case .modes:
-            return "\(settings.selectedMode.rawValue) - \(settings.firstNote)\(3 + settings.octaveOffset)"
+            return "\(settings.selectedMode.rawValue) - \(settings.firstNote)\(4 + settings.octaveOffset)"
         case .genres:
-            return "\(settings.selectedGenus.rawValue) - \(settings.firstNote)\(3 + settings.octaveOffset)"
+            return "\(settings.selectedGenus.rawValue) - \(settings.firstNote)\(4 + settings.octaveOffset)"
         case .pentatonic:
-            return "Pentatonic - \(settings.firstNote)\(3 + settings.octaveOffset)"
+            return "Pentatonic - \(settings.firstNote)\(4 + settings.octaveOffset)"
         case .doubleHarmonic:
-            return "Double Harmonic - \(settings.firstNote)\(3 + settings.octaveOffset)"
+            return "Double Harmonic - \(settings.firstNote)\(4 + settings.octaveOffset)"
         case .phorminx:
-            return "Phorminx - \(settings.firstNote)\(3 + settings.octaveOffset)"
+            return "Phorminx - \(settings.firstNote)\(4 + settings.octaveOffset)"
         }
     }
 
@@ -974,21 +1359,6 @@ struct MainView: View {
         }
     }
 
-    private func getStringNotes() -> [String] {
-        let frequencies = stringFrequencies
-        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-        let a4Frequency = 440.0
-
-        return frequencies.map { freq in
-            let semitonesFromA4 = 12.0 * log2(freq / a4Frequency)
-            let nearestSemitone = Int(round(semitonesFromA4))
-
-            let noteIndex = (nearestSemitone + 57) % 12
-            let octave = 4 + (nearestSemitone + 9) / 12
-
-            return "\(noteNames[noteIndex])\(octave)"
-        }
-    }
 }
 
 
