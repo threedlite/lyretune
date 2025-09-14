@@ -710,7 +710,7 @@ class SettingsManager: ObservableObject {
         profiles.removeAll { $0.name == name }
         profiles.append(profile)
 
-        // Save to UserDefaults with iCloud sync explicitly disabled
+        // Save to local UserDefaults only
         if let encoded = try? JSONEncoder().encode(profiles) {
             let localDefaults = UserDefaults(suiteName: "com.lyretuner.local")!
             localDefaults.set(encoded, forKey: "lyretune_profiles_local")
@@ -741,7 +741,7 @@ class SettingsManager: ObservableObject {
             selectedProfileName = ""
         }
 
-        // Save to UserDefaults with iCloud sync explicitly disabled
+        // Save to local UserDefaults only
         if let encoded = try? JSONEncoder().encode(profiles) {
             let localDefaults = UserDefaults(suiteName: "com.lyretuner.local")!
             localDefaults.set(encoded, forKey: "lyretune_profiles_local")
@@ -1063,9 +1063,69 @@ struct FFTVisualizationView: View {
     let showFullSpectrum: Bool
     let tolerance: Int
     let sampleRate: Double  // Add sample rate to ensure correct frequency calculation
+    let highPassFilter: Int  // Add high pass filter value
+    let noiseGate: Float  // Add noise gate value
+
+    // Zoom and pan state
+    @State private var zoomLevel: CGFloat = 1.0
+    @State private var lastZoomLevel: CGFloat = 1.0
+    @State private var panOffset: CGFloat = 0.0
+    @State private var lastPanOffset: CGFloat = 0.0
 
     var body: some View {
         GeometryReader { geometry in
+            let binToFreq = sampleRate / 16384.0  // Each bin represents frequency per FFT bin
+
+            // Calculate BASE display range based on display mode
+            let baseMinFreq: Double = {
+                if showFullSpectrum {
+                    // Show full spectrum from 20Hz to 8kHz (like Android)
+                    return 20.0
+                } else {
+                    // Focus on string frequencies with padding
+                    let sortedFreqs = stringFrequencies.sorted()
+                    let minStringFreq = sortedFreqs.first ?? 100
+                    let range = (sortedFreqs.last ?? 1000) - minStringFreq
+                    let padding = range * 0.2
+                    return max(50.0, minStringFreq - padding)
+                }
+            }()
+
+            let baseMaxFreq: Double = {
+                if showFullSpectrum {
+                    // Show full spectrum from 20Hz to 8kHz (like Android)
+                    return 8000.0
+                } else {
+                    // Focus on string frequencies with padding
+                    let sortedFreqs = stringFrequencies.sorted()
+                    let maxStringFreq = sortedFreqs.last ?? 1000
+                    let range = maxStringFreq - (sortedFreqs.first ?? 100)
+                    let padding = range * 0.2
+                    return min(2000.0, maxStringFreq + padding)
+                }
+            }()
+
+            // Apply zoom and pan to frequency range (like Android)
+            let freqRange = max(baseMaxFreq - baseMinFreq, 1.0)
+            let safeZoomLevel = min(max(Double(zoomLevel), 0.1), 20.0)
+            let zoomedRange = freqRange / safeZoomLevel
+            let centerFreq = baseMinFreq + freqRange * 0.5
+
+            // Calculate pan offset in frequency space
+            let maxPanFreqRange = freqRange - zoomedRange
+            let panFreqOffset = (Double(panOffset) / (geometry.size.height * safeZoomLevel)) * maxPanFreqRange
+
+            // Calculate display window with bounds checking
+            let rawMinFreq = centerFreq - zoomedRange * 0.5 + panFreqOffset
+            let rawMaxFreq = rawMinFreq + zoomedRange
+
+            // Ensure we stay within the base frequency range
+            let displayMinFreq = max(rawMinFreq, baseMinFreq)
+            let displayMaxFreq = min(rawMaxFreq, baseMaxFreq)
+
+            let minBin = Int(displayMinFreq / binToFreq)
+            let maxBin = min(Int(displayMaxFreq / binToFreq), fullSpectrum.count - 1)
+
             ZStack {
                 // Background
                 LinearGradient(
@@ -1074,32 +1134,19 @@ struct FFTVisualizationView: View {
                     endPoint: .bottom
                 )
 
-                // FFT Bars - Display full spectrum data at correct frequencies (like Android)
-                // Use the actual sample rate from the audio engine
-                let binToFreq = sampleRate / 16384.0  // Each bin represents frequency per FFT bin
-
-                // Calculate display range based on string frequencies
-                let sortedFreqs = stringFrequencies.sorted()
-                let minStringFreq = sortedFreqs.first ?? 100
-                let maxStringFreq = sortedFreqs.last ?? 1000
-                let range = maxStringFreq - minStringFreq
-                let padding = range * 0.2
-                let displayMinFreq = max(50.0, minStringFreq - padding)
-                let displayMaxFreq = min(2000.0, maxStringFreq + padding)
-
-                let minBin = Int(displayMinFreq / binToFreq)
-                let maxBin = min(Int(displayMaxFreq / binToFreq), fullSpectrum.count - 1)
-
-                // Display ALL bins in the visible range
+                // Display ALL bins in the visible range (like Android)
                 ForEach(minBin...maxBin, id: \.self) { index in
                     let frequency = Double(index) * binToFreq
-                    let yPos = frequencyToYPosition(frequency, height: geometry.size.height,
-                                                   minFreq: displayMinFreq, maxFreq: displayMaxFreq)
+
+                    // Map frequency to y position using LINEAR scaling (like Android)
+                    let freqDiff = displayMaxFreq - displayMinFreq
+                    let normalizedFreq = freqDiff > 0 ? (frequency - displayMinFreq) / freqDiff : 0.5
+                    let yPos = CGFloat(1.0 - normalizedFreq) * geometry.size.height
 
                     // Calculate bar height to touch neighbors
                     let nextFrequency = Double(index + 1) * binToFreq
-                    let nextYPos = frequencyToYPosition(nextFrequency, height: geometry.size.height,
-                                                        minFreq: displayMinFreq, maxFreq: displayMaxFreq)
+                    let nextNormalizedFreq = freqDiff > 0 ? (nextFrequency - displayMinFreq) / freqDiff : 0.5
+                    let nextYPos = CGFloat(1.0 - nextNormalizedFreq) * geometry.size.height
                     let barHeight = abs(yPos - nextYPos) + 1  // +1 to ensure overlap
 
                     // Always show a bar, even if magnitude is very small
@@ -1113,6 +1160,26 @@ struct FFTVisualizationView: View {
                             .frame(width: barWidth, height: barHeight)  // Height based on distance to next bar
                             .position(x: barWidth / 2, y: yPos)
                     }
+                }
+
+                // Draw grey horizontal line for high pass filter frequency
+                let highPassFreq = Double(highPassFilter)
+                if highPassFreq >= displayMinFreq && highPassFreq <= displayMaxFreq {
+                    let highPassY = frequencyToYPosition(highPassFreq, height: geometry.size.height,
+                                                        minFreq: displayMinFreq, maxFreq: displayMaxFreq)
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: geometry.size.width, height: 1)
+                        .position(x: geometry.size.width / 2, y: highPassY)
+                }
+
+                // Draw grey vertical line for noise gate threshold
+                let noiseThresholdX = CGFloat(noiseGate) * geometry.size.width * 0.8
+                if noiseThresholdX > 0 {
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.5))
+                        .frame(width: 1, height: geometry.size.height)
+                        .position(x: noiseThresholdX, y: geometry.size.height / 2)
                 }
 
                 // String frequency lines with note labels
@@ -1154,6 +1221,41 @@ struct FFTVisualizationView: View {
                 }
 
             }
+            // Add double tap to reset FIRST (higher priority)
+            .onTapGesture(count: 2) {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    zoomLevel = 1.0
+                    lastZoomLevel = 1.0
+                    panOffset = 0.0
+                    lastPanOffset = 0.0
+                }
+            }
+            // Add combined gesture that handles both zoom and pan
+            .gesture(
+                SimultaneousGesture(
+                    MagnificationGesture()
+                        .onChanged { value in
+                            let newZoom = lastZoomLevel * value
+                            zoomLevel = min(max(newZoom, 0.5), 10.0) // Limit zoom between 0.5x and 10x
+                        }
+                        .onEnded { value in
+                            lastZoomLevel = zoomLevel
+                        },
+                    DragGesture()
+                        .onChanged { value in
+                            // Use vertical translation for frequency navigation (like Android)
+                            let translation = value.translation.height
+                            panOffset = lastPanOffset + translation
+
+                            // Limit pan based on zoom level (like Android)
+                            let maxPan = geometry.size.height * zoomLevel * zoomLevel
+                            panOffset = min(max(panOffset, -maxPan), maxPan)
+                        }
+                        .onEnded { value in
+                            lastPanOffset = panOffset
+                        }
+                )
+            )
         }
     }
 
@@ -1194,14 +1296,13 @@ struct FFTVisualizationView: View {
             finalMaxFreq = min(2000.0, maxStringFreq + padding)
         }
 
-        // Use logarithmic scaling for better visual distribution
-        let logFreq = log10(frequency)
-        let logMin = log10(finalMinFreq)
-        let logMax = log10(finalMaxFreq)
-        let normalized = (logFreq - logMin) / (logMax - logMin)
+        // Use LINEAR scaling like Android (not logarithmic)
+        let freqDiff = finalMaxFreq - finalMinFreq
+        let normalizedFreq = freqDiff > 0 ? (frequency - finalMinFreq) / freqDiff : 0.5
+        let clampedFreq = min(max(normalizedFreq, 0.0), 1.0)
 
         // Invert so high frequencies are at the top
-        return CGFloat(1.0 - normalized) * height
+        return CGFloat(1.0 - clampedFreq) * height
     }
 
     private func isNearFrequency(_ target: Double, _ current: Double, tolerance: Int = 3) -> Bool {
@@ -1293,12 +1394,11 @@ struct MainView: View {
                         dominantFrequency: audioManager.dominantFrequency,
                         showFullSpectrum: settings.showFullSpectrum,
                         tolerance: settings.tolerance,
-                        sampleRate: audioManager.sampleRate
+                        sampleRate: audioManager.sampleRate,
+                        highPassFilter: settings.highPassFilter,
+                        noiseGate: Float(settings.noiseGate) / 100.0
                     )
-                    .frame(height: 450)
                     .padding()
-
-                    Spacer()
                 }
             }
             .navigationBarHidden(true)
