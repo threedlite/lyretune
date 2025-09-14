@@ -1,5 +1,14 @@
 # LyreTune Build Instructions
 
+## IMPORTANT iOS REQUIREMENTS
+
+### NO iCloud Sync
+**CRITICAL**: The iOS app must NOT use iCloud sync for settings or any data.
+- Use `UserDefaults(suiteName: "com.lyretuner.local")` instead of `UserDefaults.standard`
+- Never use `UserDefaults.standard` as it automatically syncs with iCloud
+- All settings must remain local to the device only
+- Do not add any cloud features without explicit permission
+
 ## Prerequisites
 - Android Studio
 - Android SDK
