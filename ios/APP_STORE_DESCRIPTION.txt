@@ -1,0 +1,48 @@
+APP STORE DESCRIPTION
+=====================
+
+Title: LyreTune - Ancient Greek Lyre Tuner
+
+Subtitle (30 chars max): Tune your lyre accurately
+
+Description:
+------------
+LyreTune helps you tune ancient Greek lyres and similar stringed instruments using your device's microphone.
+
+The app detects musical pitches in real-time and shows you exactly which note you're playing, making it easy to achieve accurate tuning for historical music performance.
+
+Features:
+• Real-time pitch detection using your device's microphone
+• Support for multiple ancient Greek musical scales (Lydian, Phrygian, Dorian, and more)
+• Choice of temperaments including Pythagorean and Just Intonation
+• Visual frequency display showing exact Hz and cents offset
+• Adjustable A4 reference pitch (default 440 Hz)
+• Works with lyres, kitharas, and other stringed instruments
+• No internet connection required
+• No ads or in-app purchases
+• Privacy-focused: no data collection
+
+Whether you're a historical music enthusiast, student, or professional performer, LyreTune provides the specialized tuning support you need for ancient Greek instruments.
+
+The app processes audio entirely on your device. No recordings are stored or transmitted.
+
+---
+
+Keywords (100 chars max):
+lyre,tuner,ancient,greek,music,kithara,pitch,frequency,tuning,instrument,historical,pythagorean
+
+---
+
+Promotional Text (170 chars):
+Precise tuning for ancient Greek lyres. Real-time pitch detection with historical scales and temperaments. Simple, accurate, privacy-focused.
+
+---
+
+Support URL: https://github.com/yourusername/lyretune
+Marketing URL: [optional - can leave blank]
+Copyright: © 2024 [Your Name]
+
+Category: Music
+Secondary Category: Utilities
+
+Age Rating: 4+ (No objectionable content)

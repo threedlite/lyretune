@@ -7,11 +7,15 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7FA5BE672E8220D100901C51 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 7FA5BE662E8220D100901C51 /* LaunchScreen.storyboard */; };
+		7FA5BE692E82226800901C51 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 7FA5BE682E82226800901C51 /* PrivacyInfo.xcprivacy */; };
 		8B4567891234567890ABCDEF /* LyreTuneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B4567881234567890ABCDEF /* LyreTuneApp.swift */; };
 		8B4567921234567890ABCDEF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8B4567911234567890ABCDEF /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		7FA5BE662E8220D100901C51 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		7FA5BE682E82226800901C51 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		8B4567851234567890ABCDEF /* LyreTune.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LyreTune.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8B4567881234567890ABCDEF /* LyreTuneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyreTuneApp.swift; sourceTree = "<group>"; };
 		8B4567911234567890ABCDEF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -48,6 +52,8 @@
 		8B4567871234567890ABCDEF /* LyreTune */ = {
 			isa = PBXGroup;
 			children = (
+				7FA5BE682E82226800901C51 /* PrivacyInfo.xcprivacy */,
+				7FA5BE662E8220D100901C51 /* LaunchScreen.storyboard */,
 				8B4567881234567890ABCDEF /* LyreTuneApp.swift */,
 				8B4567911234567890ABCDEF /* Assets.xcassets */,
 				8B4567931234567890ABCDEF /* Info.plist */,
@@ -83,7 +89,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 1640;
 				TargetAttributes = {
 					8B4567841234567890ABCDEF = {
 						CreatedOnToolsVersion = 15.0;
@@ -113,7 +119,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7FA5BE692E82226800901C51 /* PrivacyInfo.xcprivacy in Resources */,
 				8B4567921234567890ABCDEF /* Assets.xcassets in Resources */,
+				7FA5BE672E8220D100901C51 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -166,6 +174,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = MN9N7C8UTV;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -229,6 +238,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = MN9N7C8UTV;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -257,7 +267,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = MN9N7C8UTV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LyreTune/Info.plist;
@@ -288,7 +297,6 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = MN9N7C8UTV;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = LyreTune/Info.plist;
