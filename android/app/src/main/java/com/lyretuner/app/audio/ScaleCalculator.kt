@@ -62,10 +62,10 @@ class ScaleCalculator {
                 Mode.PHRYGIOS to listOf("D", "E", "F", "G", "A", "B", "C"),
                 // Ancient Dorios = Modern Phrygian (E F G A B C D)
                 Mode.DORIOS to listOf("E", "F", "G", "A", "B", "C", "D"),
-                // Ancient Hypolydios = Modern Mixolydian (G A B C D E F)
-                Mode.HYPOLYDIOS to listOf("G", "A", "B", "C", "D", "E", "F"),
-                // Ancient Hypophrygios = Modern Lydian (F G A B C D E)
-                Mode.HYPOPHRYGIOS to listOf("F", "G", "A", "B", "C", "D", "E")
+                // Ancient Hypolydios = Modern Lydian (F G A B C D E)
+                Mode.HYPOLYDIOS to listOf("F", "G", "A", "B", "C", "D", "E"),
+                // Ancient Hypophrygios = Modern Mixolydian (G A B C D E F)
+                Mode.HYPOPHRYGIOS to listOf("G", "A", "B", "C", "D", "E", "F")
             )
             val basePattern = basePatterns[mode]!!
             return transposeScale(basePattern, basePattern[0], firstNote)

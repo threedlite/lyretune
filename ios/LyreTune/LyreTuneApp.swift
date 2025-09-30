@@ -62,11 +62,11 @@ enum Mode: String, CaseIterable {
             // Ancient Dorios = Modern Phrygian (E F G A B C D)
             return ["E", "F", "G", "A", "B", "C", "D"]
         case .hypolydios:
-            // Ancient Hypolydios = Modern Mixolydian (G A B C D E F)
-            return ["G", "A", "B", "C", "D", "E", "F"]
-        case .hypophrygios:
-            // Ancient Hypophrygios = Modern Lydian (F G A B C D E)
+            // Ancient Hypolydios = Modern Lydian (F G A B C D E)
             return ["F", "G", "A", "B", "C", "D", "E"]
+        case .hypophrygios:
+            // Ancient Hypophrygios = Modern Mixolydian (G A B C D E F)
+            return ["G", "A", "B", "C", "D", "E", "F"]
         }
     }
 
