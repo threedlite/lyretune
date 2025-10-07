@@ -160,7 +160,7 @@ class AudioManager: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private let playbackEngine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
-    private let fftSize = 16384  // Android default: "Very High"
+    private var fftSize = 16384  // Default: "Very High"
     private var fftSetup: FFTSetup?
     private var window: [Float] = []
 
@@ -173,6 +173,13 @@ class AudioManager: ObservableObject {
         setupFFT()
         setupAudio()
         setupPlaybackEngine()
+    }
+
+    func updateFftSize(_ newSize: Int) {
+        guard newSize != fftSize else { return }
+        fftSize = newSize
+        setupFFT()
+        setupAudio()
     }
 
     private func setupFFT() {
@@ -206,8 +213,8 @@ class AudioManager: ObservableObject {
             return
         }
 
-        // Update sample rate if it changed
-        if sampleRate != format.sampleRate {
+        // Update sample rate if it changed (only if valid)
+        if sampleRate != format.sampleRate && format.sampleRate > 0 && format.sampleRate.isFinite {
             sampleRate = format.sampleRate
         }
 
@@ -395,13 +402,30 @@ class AudioManager: ObservableObject {
         do {
             // Request microphone permission first
             #if os(iOS)
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                if granted {
-                    do {
-                        try self.audioEngine.start()
-                        self.isRecording = true
-                    } catch {
-                        print("Failed to start audio engine: \(error)")
+            if #available(iOS 17.0, *) {
+                AVAudioApplication.requestRecordPermission { granted in
+                    if granted {
+                        do {
+                            try self.audioEngine.start()
+                            DispatchQueue.main.async {
+                                self.isRecording = true
+                            }
+                        } catch {
+                            print("Failed to start audio engine: \(error)")
+                        }
+                    }
+                }
+            } else {
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    if granted {
+                        do {
+                            try self.audioEngine.start()
+                            DispatchQueue.main.async {
+                                self.isRecording = true
+                            }
+                        } catch {
+                            print("Failed to start audio engine: \(error)")
+                        }
                     }
                 }
             }
@@ -416,7 +440,9 @@ class AudioManager: ObservableObject {
 
     func stopRecording() {
         audioEngine.stop()
-        isRecording = false
+        DispatchQueue.main.async {
+            self.isRecording = false
+        }
     }
 
     // MARK: - Audio Playback
@@ -583,7 +609,9 @@ class AudioManager: ObservableObject {
     }
 
     func stopPlayingNotes() {
-        isPlayingNotes = false
+        DispatchQueue.main.async {
+            self.isPlayingNotes = false
+        }
         playerNode.stop()
     }
 
@@ -692,13 +720,14 @@ class SettingsManager: ObservableObject {
             }
         }
 
-        // Now test Dorios mode starting at E4
-        print("\n=== DORIOS MODE TEST (E4 start) ===")
+        // Now test Dorios mode starting at E4 with JUST ANCIENT temperament (default)
+        print("\n=== DORIOS MODE TEST (E4 start, Just Ancient) ===")
         let doriosNotes = ["E", "F", "G", "A", "B", "C", "D"]
         for (index, note) in doriosNotes.enumerated() {
             let octave = (note == "C" || note == "D") ? 5 : 4  // C and D are in next octave
-            let freq = noteToFrequency(note: note, octave: octave, temperament: .equal)
-            print("String \(index): \(note)\(octave) = \(freq) Hz")
+            let freqEqual = noteToFrequency(note: note, octave: octave, temperament: .equal)
+            let freqJustAncient = noteToFrequency(note: note, octave: octave, temperament: .justAncient)
+            print("String \(index): \(note)\(octave) = \(freqJustAncient) Hz (justAncient) vs \(freqEqual) Hz (equal)")
         }
     }
 
@@ -1003,6 +1032,7 @@ class SettingsManager: ObservableObject {
             15.0/8.0   // G#/Ab
         ]
 
+        // Match Android implementation exactly (ScaleCalculator.kt:295-298)
         let octaves = Int(floor(semitones / 12.0))
         let noteIndex = Int((semitones.truncatingRemainder(dividingBy: 12.0) + 12.0).truncatingRemainder(dividingBy: 12.0))
 
@@ -1019,9 +1049,11 @@ class SettingsManager: ObservableObject {
 
         let ratios = shrutiCents.map { cents in pow(2.0, cents / 1200.0) }
 
+        // Match Android implementation exactly (ScaleCalculator.kt:310-316)
         let octaves = Int(floor(semitones / 12.0))
-        let semitoneInOctave = semitones.truncatingRemainder(dividingBy: 12.0) + 12.0
-        let quarterTonesFromA = Int(round(semitoneInOctave.truncatingRemainder(dividingBy: 12.0) * 2.0))
+        let semitoneInOctave = (semitones.truncatingRemainder(dividingBy: 12.0) + 12.0).truncatingRemainder(dividingBy: 12.0)
+
+        let quarterTonesFromA = Int(round(semitoneInOctave * 2.0))
         let quarterToneIndex = quarterTonesFromA % 24
 
         return ratios[quarterToneIndex] * pow(2.0, Double(octaves))
@@ -1049,6 +1081,7 @@ class SettingsManager: ObservableObject {
             1.8692      // G#/Ab
         ]
 
+        // Match Android implementation exactly (ScaleCalculator.kt:339-342)
         let octaves = Int(floor(semitones / 12.0))
         let noteIndex = Int((semitones.truncatingRemainder(dividingBy: 12.0) + 12.0).truncatingRemainder(dividingBy: 12.0))
 
@@ -1077,6 +1110,7 @@ struct FFTVisualizationView: View {
     let showFullSpectrum: Bool
     let tolerance: Int
     let sampleRate: Double  // Add sample rate to ensure correct frequency calculation
+    let fftSize: Int  // Actual FFT size from settings
     let highPassFilter: Int  // Add high pass filter value
     let noiseGate: Float  // Add noise gate value
 
@@ -1088,7 +1122,9 @@ struct FFTVisualizationView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let binToFreq = sampleRate / 16384.0  // Each bin represents frequency per FFT bin
+            // Safety check: ensure sampleRate is valid
+            if sampleRate > 0 && sampleRate.isFinite && fftSize > 0 {
+                let binToFreq = sampleRate / Double(fftSize)  // Each bin represents frequency per FFT bin
 
             // Calculate BASE display range based on display mode
             let baseMinFreq: Double = {
@@ -1137,8 +1173,9 @@ struct FFTVisualizationView: View {
             let displayMinFreq = max(rawMinFreq, baseMinFreq)
             let displayMaxFreq = min(rawMaxFreq, baseMaxFreq)
 
-            let minBin = Int(displayMinFreq / binToFreq)
-            let maxBin = min(Int(displayMaxFreq / binToFreq), fullSpectrum.count - 1)
+            // Safety check: ensure values are finite before converting to Int
+            let minBin = displayMinFreq.isFinite && binToFreq > 0 ? Int(displayMinFreq / binToFreq) : 0
+            let maxBin = displayMaxFreq.isFinite && binToFreq > 0 ? min(Int(displayMaxFreq / binToFreq), fullSpectrum.count - 1) : fullSpectrum.count - 1
 
             ZStack {
                 // Background
@@ -1270,6 +1307,14 @@ struct FFTVisualizationView: View {
                         }
                 )
             )
+            } else {
+                // Show loading state while audio initializes
+                ZStack {
+                    Color.black
+                    Text("Initializing audio...")
+                        .foregroundColor(.white)
+                }
+            }
         }
     }
 
@@ -1409,6 +1454,7 @@ struct MainView: View {
                         showFullSpectrum: settings.showFullSpectrum,
                         tolerance: settings.tolerance,
                         sampleRate: audioManager.sampleRate,
+                        fftSize: settings.getFftSize(),
                         highPassFilter: settings.highPassFilter,
                         noiseGate: Float(settings.noiseGate) / 100.0
                     )
@@ -1445,6 +1491,7 @@ struct MainView: View {
         audioManager.highPassFilter = settings.highPassFilter
         audioManager.noiseGate = settings.noiseGate
         audioManager.tolerance = settings.tolerance
+        audioManager.updateFftSize(settings.getFftSize())
     }
 
     private func getSubtitleText() -> String {
@@ -1773,10 +1820,10 @@ struct TranspositionToolView: View {
         .onAppear {
             updateTransposition()
         }
-        .onChange(of: inputText) { _ in
+        .onChange(of: inputText) {
             updateTransposition()
         }
-        .onChange(of: transpositionAmount) { _ in
+        .onChange(of: transpositionAmount) {
             updateTransposition()
         }
     }
@@ -1926,7 +1973,7 @@ struct SettingsView: View {
                                 Text(profile.name).tag(profile.name)
                             }
                         }
-                        .onChange(of: settings.selectedProfileName) { newValue in
+                        .onChange(of: settings.selectedProfileName) { oldValue, newValue in
                             if let profile = settings.profiles.first(where: { $0.name == newValue }) {
                                 settings.loadProfile(profile)
                             }
@@ -2122,7 +2169,7 @@ struct LyreTuneApp: App {
         do {
             let session = AVAudioSession.sharedInstance()
             // Use .default mode instead of .measurement for better playback volume
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try session.setActive(true)
         } catch {
             print("Failed to configure audio session: \(error)")
