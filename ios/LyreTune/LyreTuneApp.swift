@@ -149,7 +149,7 @@ enum Temperament: String, CaseIterable {
 
 class AudioManager: ObservableObject {
     @Published var spectrum: [Float] = Array(repeating: 0, count: 100)
-    @Published var fullSpectrum: [Float] = Array(repeating: 0, count: 8192) // Full FFT data (16384/2)
+    @Published var fullSpectrum: [Float] = [] // Full FFT data - size = fftSize/2
     @Published var isRecording = false
     @Published var dominantFrequency: Double = 0
     @Published var detectedNote: String = "--"
@@ -173,11 +173,15 @@ class AudioManager: ObservableObject {
         setupFFT()
         setupAudio()
         setupPlaybackEngine()
+        // Initialize fullSpectrum with correct size
+        fullSpectrum = Array(repeating: 0, count: fftSize / 2)
     }
 
     func updateFftSize(_ newSize: Int) {
         guard newSize != fftSize else { return }
         fftSize = newSize
+        // Resize fullSpectrum immediately since this is called from async context
+        fullSpectrum = Array(repeating: 0, count: newSize / 2)
         setupFFT()
         setupAudio()
     }
@@ -237,17 +241,19 @@ class AudioManager: ObservableObject {
         guard frameLength > 0 else { return }
 
         // Use the first channel (or mix channels if stereo)
+        // Pad to fftSize like Android (AudioProcessor.kt:84)
         let channelCount = Int(buffer.format.channelCount)
-        var samples = [Float](repeating: 0, count: min(frameLength, fftSize))
+        let sampleCount = min(frameLength, fftSize)
+        var samples = [Float](repeating: 0, count: fftSize) // Pad with zeros
 
         if channelCount == 1 {
             // Mono - copy directly
-            for i in 0..<samples.count {
+            for i in 0..<sampleCount {
                 samples[i] = channelData[0][i]
             }
         } else if channelCount > 1 {
             // Stereo or more - mix down to mono
-            for i in 0..<samples.count {
+            for i in 0..<sampleCount {
                 var sum: Float = 0
                 for channel in 0..<min(channelCount, 2) {
                     sum += channelData[channel][i]
@@ -255,9 +261,7 @@ class AudioManager: ObservableObject {
                 samples[i] = sum / Float(min(channelCount, 2))
             }
         }
-
-        // Ensure we have enough samples
-        guard samples.count >= fftSize else { return }
+        // samples is now padded to fftSize with zeros if needed
 
         // Apply window
         var windowedData = [Float](repeating: 0, count: fftSize)
@@ -327,20 +331,21 @@ class AudioManager: ObservableObject {
                     }
                 }
 
-                // Find dominant frequency (considering high-pass filter and noise gate)
-                let highPassBin = Int(Double(self.highPassFilter) * Double(fftSize) / self.sampleRate)
-                var maxMagnitudeIndex = -1
-                var maxMagnitudeValue: Float = 0
+                // Find fundamental frequency using harmonic analysis (like Android)
+                let binToFreq = Float(self.sampleRate) / Float(fftSize)
+                let fundamentalBin = self.findFundamentalFrequency(
+                    magnitudes: magnitudes,
+                    binToFreq: binToFreq,
+                    maxMagnitude: maxMagnitude
+                )
 
-                for i in highPassBin..<magnitudes.count {
-                    if magnitudes[i] > maxMagnitudeValue && magnitudes[i] >= noiseThreshold {
-                        maxMagnitudeValue = magnitudes[i]
-                        maxMagnitudeIndex = i
-                    }
-                }
+                // Apply normalized magnitude check (like Android lines 149-162)
+                // Normalize to 0-1 range based on reasonable signal levels
+                let normalizedMagnitude = maxMagnitude > 0 ? min(1.0, maxMagnitude / 100.0) : 0.0
 
-                if maxMagnitudeIndex > 0 {
-                    let freq = Double(maxMagnitudeIndex) * self.sampleRate / Double(self.fftSize)
+                // Apply noise gate - if normalized magnitude is below threshold, return no signal
+                if fundamentalBin > 0 && normalizedMagnitude >= self.noiseGate {
+                    let freq = Double(fundamentalBin) * self.sampleRate / Double(self.fftSize)
 
                     DispatchQueue.main.async {
                         self.spectrum = normalizedMagnitudes
@@ -349,7 +354,7 @@ class AudioManager: ObservableObject {
                         self.updateDetectedNote(frequency: freq)
                     }
                 } else {
-                    // No valid frequency detected (below noise gate)
+                    // No valid frequency detected (below noise gate or no fundamental found)
                     DispatchQueue.main.async {
                         self.spectrum = normalizedMagnitudes
                         self.fullSpectrum = normalizedFullSpectrum
@@ -360,6 +365,105 @@ class AudioManager: ObservableObject {
                 }
             }
         }
+    }
+
+    // Port of Android's findFundamentalFrequency - sophisticated harmonic analysis
+    private func findFundamentalFrequency(magnitudes: [Float], binToFreq: Float, maxMagnitude: Float) -> Int {
+        let minFreq = Double(self.highPassFilter) // Use high-pass filter setting
+        let maxFreq = 2000.0 // Maximum frequency to consider (2000 Hz)
+        let minBin = max(1, Int(minFreq / Double(binToFreq)))
+        let maxBin = min(magnitudes.count - 1, Int(maxFreq / Double(binToFreq)))
+
+        // First, find the peak magnitude in our frequency range
+        var peakBin = minBin
+        var peakMagnitude = magnitudes[minBin]
+        for i in minBin...maxBin {
+            if magnitudes[i] > peakMagnitude {
+                peakMagnitude = magnitudes[i]
+                peakBin = i
+            }
+        }
+
+        // Strongly prefer the dominant peak if it's in a reasonable frequency range
+        let peakFreq = Float(peakBin) * binToFreq
+        if peakMagnitude > maxMagnitude * 0.6 && peakFreq >= 200.0 {
+            // Check if there's an even stronger peak at exactly double this frequency
+            let doubleBin = peakBin * 2
+            let doubleFreqStrength = doubleBin < magnitudes.count ? magnitudes[doubleBin] : 0.0
+
+            // If the double frequency isn't significantly stronger, use this peak
+            if doubleFreqStrength < peakMagnitude * 1.5 {
+                print("AudioManager: Using dominant peak as fundamental: \(peakFreq)Hz (peak: \(peakMagnitude), double: \(doubleFreqStrength))")
+                return peakBin
+            } else {
+                print("AudioManager: Skipping peak at \(peakFreq)Hz - stronger double at \(Float(doubleBin) * binToFreq)Hz")
+            }
+        }
+
+        var bestFundamental = 0
+        var bestScore: Float = 0.0
+
+        // Test each potential fundamental frequency
+        for fundamentalBin in minBin...maxBin {
+            let fundamentalMag = magnitudes[fundamentalBin]
+            let testFreq = Float(fundamentalBin) * binToFreq
+
+            // Skip if fundamental is too weak
+            if fundamentalMag < maxMagnitude * 0.1 { continue }
+
+            var harmonicScore = fundamentalMag
+            var harmonicCount: Float = 1.0
+
+            // Check if this frequency is itself a harmonic of a lower frequency
+            var isLikelyHarmonic = false
+            for subharmonic in 2...6 {  // Check more subharmonics
+                let subharmonicBin = fundamentalBin / subharmonic
+                if subharmonicBin >= minBin && magnitudes[subharmonicBin] > maxMagnitude * 0.2 {  // Much stronger threshold
+                    isLikelyHarmonic = true
+                    print("AudioManager: Frequency \(testFreq)Hz rejected as harmonic - found stronger subharmonic at \(Float(subharmonicBin) * binToFreq)Hz")
+                    break
+                }
+            }
+
+            // Penalize if this frequency appears to be a harmonic
+            if isLikelyHarmonic {
+                harmonicScore *= 0.7
+            }
+
+            // Check harmonics (2nd, 3rd, 4th, 5th)
+            for harmonic in 2...5 {
+                let harmonicBin = fundamentalBin * harmonic
+                if harmonicBin < magnitudes.count {
+                    let harmonicMag = magnitudes[harmonicBin]
+                    // Weight harmonics less than fundamental
+                    harmonicScore += harmonicMag * (0.8 / Float(harmonic))
+                    harmonicCount += 1.0
+                }
+            }
+
+            // Normalize score by number of harmonics found
+            let avgScore = harmonicScore / harmonicCount
+
+            // Give bonus to frequencies near the peak (likely the true fundamental)
+            let distanceFromPeak = abs(Float(fundamentalBin - peakBin))
+            let proximityBonus = 1.0 + (0.2 * exp(-distanceFromPeak / 50.0))
+            let adjustedScore = avgScore * proximityBonus
+
+            // Prefer lower frequencies when scores are similar (within 10%)
+            // This helps avoid detecting harmonics as fundamentals
+            let scoreThreshold = bestScore * 0.9
+
+            if adjustedScore > bestScore || (adjustedScore > scoreThreshold && fundamentalBin < bestFundamental) {
+                // Log when we find a new best candidate
+                if testFreq > 400 && testFreq < 600 {
+                    print("AudioManager: New best candidate: \(testFreq)Hz (bin \(fundamentalBin)) score=\(adjustedScore), was \(Float(bestFundamental) * binToFreq)Hz")
+                }
+                bestScore = adjustedScore
+                bestFundamental = fundamentalBin
+            }
+        }
+
+        return bestFundamental
     }
 
     private func updateDetectedNote(frequency: Double) {
@@ -1456,7 +1560,7 @@ struct MainView: View {
                         sampleRate: audioManager.sampleRate,
                         fftSize: settings.getFftSize(),
                         highPassFilter: settings.highPassFilter,
-                        noiseGate: Float(settings.noiseGate) / 100.0
+                        noiseGate: settings.noiseGate  // Already in 0.0-0.8 range
                     )
                     .padding()
                 }
@@ -1473,8 +1577,11 @@ struct MainView: View {
             .sheet(isPresented: $showingSettings) {
                 SettingsView(settings: settings)
                     .onDisappear {
-                        updateStringFrequencies()
-                        updateAudioSettings()
+                        // Dispatch async to avoid "Publishing changes from within view updates"
+                        DispatchQueue.main.async {
+                            updateStringFrequencies()
+                            updateAudioSettings()
+                        }
                     }
             }
         }
@@ -2039,7 +2146,11 @@ struct SettingsView: View {
                         Text("Number of Strings: \(settings.numberOfStrings)")
                         Slider(value: Binding(
                             get: { Double(settings.numberOfStrings) },
-                            set: { settings.numberOfStrings = Int($0) }
+                            set: { newValue in
+                                Task { @MainActor in
+                                    settings.numberOfStrings = Int(newValue)
+                                }
+                            }
                         ), in: 4...24, step: 1)
                     }
 
@@ -2047,7 +2158,11 @@ struct SettingsView: View {
                         Text("Octave Offset: \(settings.octaveOffset)")
                         Slider(value: Binding(
                             get: { Double(settings.octaveOffset) },
-                            set: { settings.octaveOffset = Int($0) }
+                            set: { newValue in
+                                Task { @MainActor in
+                                    settings.octaveOffset = Int(newValue)
+                                }
+                            }
                         ), in: -2...2, step: 1)
                     }
                 }
@@ -2070,7 +2185,11 @@ struct SettingsView: View {
                         Text("Tolerance: \(settings.tolerance) Hz")
                         Slider(value: Binding(
                             get: { Double(settings.tolerance) },
-                            set: { settings.tolerance = Int($0) }
+                            set: { newValue in
+                                Task { @MainActor in
+                                    settings.tolerance = Int(newValue)
+                                }
+                            }
                         ), in: 1...10, step: 1)
                     }
 
@@ -2078,13 +2197,24 @@ struct SettingsView: View {
                         Text("High-pass Filter: \(settings.highPassFilter) Hz")
                         Slider(value: Binding(
                             get: { Double(settings.highPassFilter) },
-                            set: { settings.highPassFilter = Int($0) }
+                            set: { newValue in
+                                Task { @MainActor in
+                                    settings.highPassFilter = Int(newValue)
+                                }
+                            }
                         ), in: 0...500, step: 5)
                     }
 
                     HStack {
                         Text("Noise Gate: \(Int(settings.noiseGate * 100))%")
-                        Slider(value: $settings.noiseGate, in: 0...0.8, step: 0.01)
+                        Slider(value: Binding(
+                            get: { settings.noiseGate },
+                            set: { newValue in
+                                Task { @MainActor in
+                                    settings.noiseGate = newValue
+                                }
+                            }
+                        ), in: 0...0.8, step: 0.01)
                     }
 
                     Toggle("Show Full Spectrum", isOn: $settings.showFullSpectrum)
