@@ -161,6 +161,124 @@ Examples of intervals that do not conform to any of the regular 7 diatonic modes
 See also relation to Byzantine music: https://en.wikipedia.org/wiki/Byzantine_music
 
 
+================================================================================
+
+
+Wikipedia has two scores by Mesomedes, Emperor Hadrian's court musician. 
+
+Here are all the notes from Mesomedes' "Kalliopeia sopha" (Prayer to Calliope):
+
+  Complete Note Sequence:
+
+  F E D C C D F F F E D D F F F D C C D E D D E F E E D C C Bb Bb Bb D E F E F F
+
+  Breakdown by phrases (matching the Greek text):
+
+  Phrase 1: F E D C (held) D F F F E D (held)
+  - "Kal-li-ó-pei-a so-phá, Mou-sṓn pro-ka-tha-gé-ti ter-pnṓn"
+
+  Phrase 2: D F F F D C C D E D D E F E E D C C Bb
+  - "kai so-phé mus-to-dó-ta, La-toûs gó-ne, Dê-li-e, Pai-án"
+
+  Phrase 3: Bb Bb D E F E F F
+  - "eû-me-neîs pá-re-o-té moi"
+
+  Key Information:
+
+  - Key: F major (one flat: Bb)
+  - Time signature: 2/4 (changes to 6/8 at measure 13, then 6/8 at measure 18)
+  - Unique notes used: F, E, D, C, Bb
+  - Interval pattern: Looking at the unique notes in order: Bb C D E F
+    - Intervals: W W W H (whole, whole, whole, half)
+
+Checking the 7 diatonic modes, this pattern appears in:
+
+  Hypolydian mode: F G A B C D E (W W W H W W H)
+
+  The hymn uses exactly the first 5 notes of Hypolydian!
+
+  Transposed to Hypolydian (F G A B C):
+
+  Original → Transposed mapping:
+  - Bb → F
+  - C → G
+  - D → A
+  - E → B
+  - F → C
+
+  Complete transposed sequence:
+
+  C B A G G A C C C B A A C C C A G G A B A A B C B B A G G F F F A B C B C C
+
+  Breakdown by phrases:
+
+  Phrase 1: C B A G (held) A C C C B A (held)
+
+  Phrase 2: A C C C A G G A B A A B C B B A G G F
+
+  Phrase 3: F F A B C B C C
+
+
+Hymn to the Sun:
+
+Mesomedes: Hymn to the Sun - Original Notes
+
+  Complete note sequence:
+
+  Bb Bb Bb Eb Eb Eb Eb Eb D C Bb C Bb Eb D C Bb Bb C D Eb D C Bb C D Eb F
+  Eb D C Bb Bb Bb Bb Bb Bb Bb D C Bb Bb Bb Bb Bb Bb Bb Eb D C Bb Bb Bb Bb Bb Bb Bb
+  Eb D C Bb Bb Bb Bb Bb Bb Bb D C Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb
+  Ab D C Bb Bb Bb Bb Bb Bb Eb Eb D C Bb C Bb Bb Bb Bb Bb Bb Bb D C
+  Bb Eb D C Bb Bb Bb Bb Bb Bb Bb Eb C Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb
+  C Bb C Bb Bb Bb Bb Bb Bb Bb C Bb C Bb Bb Bb Bb C C Bb Bb Bb D C
+  Bb Eb D C Bb Bb Bb Bb Bb Bb Bb Ab D C Bb Bb Bb Bb Bb Bb Eb Bb Eb
+  Eb D C Bb Bb Bb Bb Bb Bb Bb F Eb Eb C Bb Eb Eb Bb Bb Bb Bb Bb Bb Bb D C
+  Eb D C Bb Bb Bb Bb Bb Bb Bb Eb Eb Eb C Bb C Bb Bb Bb Bb Bb Bb Bb Bb Bb Bb
+  Bb Eb C Bb Bb Bb Bb Bb Eb Eb Eb Eb C C Bb
+
+  Analysis:
+
+  - Key: Bb major (2 flats: Bb, Eb)
+  - Unique notes used: Ab, Bb, C, D, Eb, F
+  - Interval pattern: W W W H W
+    - Ab to Bb = W
+    - Bb to C = W
+    - C to D = W
+    - D to Eb = H
+    - Eb to F = W
+
+  This pattern W W W H W matches F G A B C D in natural notes!
+
+  Transposed to Natural Notes (no sharps/flats):
+
+  Mapping:
+  - Ab → F
+  - Bb → G
+  - C → A
+  - D → B
+  - Eb → C
+  - F → D
+
+  Complete transposed sequence:
+
+  G G G C C C C C B A G A G C B A G G A B C B A G A B C D
+  C B A G G G G G G G B A G G G G G G G C B A G G G G G G G
+  C B A G G G G G G G B A G G G G G G G G G G G G G
+  F B A G G G G G G C C B A G A G G G G G G G B A
+  G C B A G G G G G G G C A G G G G G G G G G G
+  A G A G G G G G G G A G A G G G G A A G G G B A
+  G C B A G G G G G G G F B A G G G G G G C G C
+  C B A G G G G G G G D C C A G C C G G G G G G G B A
+  C B A G G G G G G G C C C A G A G G G G G G G G G G
+  G C A G G G G G C C C C A A G
+
+  This hymn works on a 6-string lyre tuned to F G A B C D (natural notes, no sharps or flats)!
+
+  This matches the Hypolydian mode starting from F: F G A B C D E (using the first 6 notes).
+
+
+
+
 
 
 
