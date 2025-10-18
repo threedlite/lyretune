@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Unified test for dyads, triads, and tetrads using the complexity formula
-with five targeted adjustments.
+Unified test for dyads, triads, tetrads, etc. using the complexity formula
+with some targeted adjustments.
+
 """
 
 import numpy as np
@@ -62,7 +63,8 @@ def complexity_with_five_adjustments(notes, augmented_penalty=0.0, sus2inv_penal
 
         ol = max(odd_p, odd_q)
         lp = largest_prime_factor(ol)
-        interval_complexity += alpha * np.log2(ol) + beta * np.log2(lp)
+        interval_complexity += alpha * np.log2(ol) + beta * np.log2(lp)   # A basic empirically-tuned formula based on Odd Limit and Largest Prime Factor, with other mods/overrides below.
+
         interval_ols.append(ol)
         interval_lps.append(lp)
 
