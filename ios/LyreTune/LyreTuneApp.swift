@@ -2022,6 +2022,521 @@ struct TranspositionToolView: View {
     }
 }
 
+// MARK: - Chord Analysis
+
+struct ChordResult {
+    let strings: [Int]
+    let notes: [String]
+    let frequencies: [Float]
+    let ratios: [Int]
+    let complexity: Double
+    let numStrings: Int
+}
+
+class LyreChordAnalyzer {
+    let frequencies: [Float]
+    let noteNames: [String]
+    let numStrings: Int
+
+    // Formula parameters (NUMERIC_EMPIRIC_20251018)
+    let augmentedPenalty = 0.6
+    let sus2invPenalty = 0.08
+    let major1invBonus = 0.057
+    let dominant7Bonus = 0.65
+    let halfdim7Penalty = 0.65
+    let alpha = 1.0
+    let beta = 0.3
+    let kappa = 1.0
+    let delta = 0.15
+    let psi = 1.6
+    let omega = 3.3
+    let nu = 0.0
+    let chi = 0.5
+
+    init(scaleData: SettingsManager.ScaleData) {
+        self.noteNames = scaleData.notes
+        self.frequencies = scaleData.frequencies.map { Float($0) }
+        self.numStrings = scaleData.notes.count
+    }
+
+    func analyzeAllChords(minStrings: Int = 2, maxStrings: Int? = nil) -> [ChordResult] {
+        var results: [ChordResult] = []
+        let maxSize = maxStrings ?? numStrings
+
+        for size in minStrings...maxSize {
+            let combinations = generateCombinations(n: numStrings, k: size)
+            for combo in combinations {
+                let chordFreqs = combo.map { frequencies[$0] }
+                let chordNotes = combo.map { noteNames[$0] }
+                let stringIndices = combo.map { $0 + 1 } // 1-indexed
+
+                let ratios = frequenciesToRatios(freqs: chordFreqs)
+                let complexity = complexityWithFiveAdjustments(notes: ratios)
+
+                results.append(ChordResult(
+                    strings: stringIndices,
+                    notes: chordNotes,
+                    frequencies: chordFreqs,
+                    ratios: ratios,
+                    complexity: complexity,
+                    numStrings: size
+                ))
+            }
+        }
+
+        // Sort by complexity (ascending - simplest first)
+        return results.sorted { $0.complexity < $1.complexity }
+    }
+
+    private func generateCombinations(n: Int, k: Int) -> [[Int]] {
+        var result: [[Int]] = []
+        var current: [Int] = []
+
+        func backtrack(start: Int) {
+            if current.count == k {
+                result.append(current)
+                return
+            }
+
+            for i in start..<n {
+                current.append(i)
+                backtrack(start: i + 1)
+                current.removeLast()
+            }
+        }
+
+        backtrack(start: 0)
+        return result
+    }
+
+    private func bankersRound(_ value: Float) -> Int {
+        let floor = Int(value.rounded(.down))
+        let fraction = value - Float(floor)
+
+        if fraction < 0.5 {
+            return floor
+        } else if fraction > 0.5 {
+            return floor + 1
+        } else {
+            // Exactly 0.5 - round to even
+            return floor % 2 == 0 ? floor : floor + 1
+        }
+    }
+
+    private func frequenciesToRatios(freqs: [Float]) -> [Int] {
+        guard !freqs.isEmpty, let minFreq = freqs.min() else { return [] }
+
+        let ratios = freqs.map { $0 / minFreq }
+        let precision: Float = 10000
+        let intRatios = ratios.map { bankersRound($0 * precision) }
+
+        let g = intRatios.reduce(intRatios[0]) { gcd($0, $1) }
+        return intRatios.map { $0 / g }
+    }
+
+    private func gcd(_ a: Int, _ b: Int) -> Int {
+        var x = abs(a)
+        var y = abs(b)
+        while y != 0 {
+            let temp = y
+            y = x % y
+            x = temp
+        }
+        return x
+    }
+
+    private func primeFactorization(_ n: Int) -> [Int] {
+        var num = n
+        var factors: [Int] = []
+        var d = 2
+
+        while d * d <= num {
+            while num % d == 0 {
+                factors.append(d)
+                num /= d
+            }
+            d += 1
+        }
+
+        if num > 1 {
+            factors.append(num)
+        }
+        return factors
+    }
+
+    private func largestPrimeFactor(_ n: Int) -> Int {
+        if n <= 1 { return 1 }
+        let factors = primeFactorization(n)
+        return factors.max() ?? 1
+    }
+
+    private func oddPart(_ n: Int) -> Int {
+        var num = n
+        while num % 2 == 0 {
+            num /= 2
+        }
+        return num
+    }
+
+    private func complexityWithFiveAdjustments(notes: [Int]) -> Double {
+        var intervalOls: [Int] = []
+        var intervalLps: [Int] = []
+        var intervalMinOddLps: [Int] = []
+        var intervalComplexity = 0.0
+
+        for i in 0..<notes.count - 1 {
+            let p = notes[i + 1]
+            let q = notes[i]
+            let g = gcd(p, q)
+            let pReduced = p / g
+            let qReduced = q / g
+
+            let oddP = oddPart(pReduced)
+            let oddQ = oddPart(qReduced)
+
+            let ol = max(oddP, oddQ)
+            let lp = largestPrimeFactor(ol)
+            intervalComplexity += alpha * log2(Double(ol)) + beta * log2(Double(lp))
+            intervalOls.append(ol)
+            intervalLps.append(lp)
+
+            let minOdd = min(oddP, oddQ)
+            let lpMinOdd = largestPrimeFactor(minOdd)
+            intervalMinOddLps.append(lpMinOdd)
+        }
+
+        if notes.count >= 3 {
+            let pSpan = notes.last!
+            let qSpan = notes.first!
+            let g = gcd(pSpan, qSpan)
+            let pSpanReduced = pSpan / g
+            let qSpanReduced = qSpan / g
+
+            let oddPSpan = oddPart(pSpanReduced)
+            let oddQSpan = oddPart(qSpanReduced)
+
+            let spanOl = max(oddPSpan, oddQSpan)
+            let spanLp = largestPrimeFactor(spanOl)
+
+            let allSameOl = Set(intervalOls).count == 1
+            let isHomogeneous = allSameOl && spanOl < intervalOls[0]
+
+            let minNote = notes.min()!
+
+            var targetedAdjustments = 0.0
+
+            // Triad adjustments
+            if notes.count == 3 {
+                if minNote == 16 && !isHomogeneous {
+                    targetedAdjustments += augmentedPenalty
+                }
+                if minNote == 9 && !isHomogeneous {
+                    targetedAdjustments += sus2invPenalty
+                }
+                if minNote == 5 && !isHomogeneous {
+                    targetedAdjustments -= major1invBonus
+                }
+            }
+
+            // Tetrad adjustments
+            if notes.count == 4 {
+                if minNote == 4 {
+                    targetedAdjustments -= dominant7Bonus
+                }
+                if minNote == 5 {
+                    targetedAdjustments += halfdim7Penalty
+                }
+            }
+
+            let homogeneityBonus: Double
+            let chiPenalty: Double
+            let psiPenalty: Double
+            let omegaPenalty: Double
+
+            if allSameOl {
+                if spanOl < intervalOls[0] {
+                    homogeneityBonus = 1.0
+
+                    if spanOl > 0 {
+                        let avgMinOddLp = Double(intervalMinOddLps.reduce(0, +)) / Double(intervalMinOddLps.count)
+                        let lpScale = avgMinOddLp / 3.0
+                        chiPenalty = chi * max(0.0, 1.0 - log2(Double(spanOl))) * lpScale
+                    } else {
+                        chiPenalty = chi
+                    }
+                } else {
+                    homogeneityBonus = 0.0
+                    chiPenalty = 0.0
+                }
+
+                if spanOl == intervalOls[0] * intervalOls[0] {
+                    let avgIntervalMinOddLp = Double(intervalMinOddLps.reduce(0, +)) / Double(intervalMinOddLps.count)
+                    psiPenalty = psi * avgIntervalMinOddLp
+                } else {
+                    psiPenalty = 0.0
+                }
+
+                omegaPenalty = 0.0
+            } else {
+                homogeneityBonus = 0.0
+                psiPenalty = 0.0
+                chiPenalty = 0.0
+                omegaPenalty = omega * max(0.0, log2(Double(spanLp)) - log2(5.0))
+            }
+
+            let minIntervalOl = intervalOls.min()!
+            let nuPenalty = nu * max(0.0, log2(Double(minIntervalOl)) - log2(5.0))
+
+            let compactnessPenalty = delta * (Double(notes.last! - notes.first!) / Double(notes.first!))
+
+            return intervalComplexity - kappa * homogeneityBonus + compactnessPenalty +
+                   psiPenalty + omegaPenalty + nuPenalty + chiPenalty + targetedAdjustments
+        } else {
+            return intervalComplexity
+        }
+    }
+
+    // Helper function to pad strings
+    private func pad(_ str: String, toLength length: Int) -> String {
+        return str.padding(toLength: length, withPad: " ", startingAt: 0)
+    }
+
+    func formatResults(_ results: [ChordResult]) -> String {
+        var sb = ""
+
+        // Limit display to top 1000 chords for performance
+        let displayLimit = 1000
+        let displayResults = Array(results.prefix(displayLimit))
+        let totalChords = results.count
+
+        sb += String(repeating: "=", count: 100) + "\n"
+        if totalChords > displayLimit {
+            sb += "CHORD COMPLEXITY ANALYSIS - Showing top \(displayLimit) of \(totalChords) chords\n"
+        } else {
+            sb += "CHORD COMPLEXITY ANALYSIS - \(totalChords) chords shown\n"
+        }
+        sb += String(repeating: "=", count: 100) + "\n\n"
+
+        sb += "LYRE TUNING\n"
+        sb += String(repeating: "-", count: 100) + "\n"
+        sb += "Number of strings: \(numStrings)\n\n"
+        sb += "\(pad("String", toLength: 8))\(pad("Note", toLength: 12))\(pad("Frequency (Hz)", toLength: 15))\n"
+        sb += String(repeating: "-", count: 100) + "\n"
+
+        for i in 0..<numStrings {
+            let stringNum = "\(i + 1)"
+            let freq = String(format: "%.2f", frequencies[i])
+            sb += "\(pad(stringNum, toLength: 8))\(pad(noteNames[i], toLength: 12))\(pad(freq, toLength: 15))\n"
+        }
+
+        sb += "\n" + String(repeating: "=", count: 100) + "\n"
+        sb += "CHORD RANKINGS\n"
+        sb += String(repeating: "=", count: 100) + "\n\n"
+        sb += "\(pad("Rank", toLength: 6))\(pad("Strings", toLength: 15))\(pad("Notes", toLength: 30))\(pad("Ratio", toLength: 20))\(pad("Complexity", toLength: 12))\n"
+        sb += String(repeating: "-", count: 100) + "\n"
+
+        for (rank, result) in displayResults.enumerated() {
+            let stringsStr = result.strings.map(String.init).joined(separator: ",")
+            let notesStr = result.notes.joined(separator: " ")
+            let ratioStr = result.ratios.map(String.init).joined(separator: ":")
+            let rankStr = "\(rank + 1)"
+            let complexityStr = String(format: "%.6f", result.complexity)
+
+            sb += "\(pad(rankStr, toLength: 6))\(pad(stringsStr, toLength: 15))\(pad(notesStr, toLength: 30))\(pad(ratioStr, toLength: 20))\(pad(complexityStr, toLength: 12))\n"
+        }
+
+        sb += "\n" + String(repeating: "=", count: 100) + "\n"
+        sb += "STATISTICS\n"
+        sb += String(repeating: "=", count: 100) + "\n"
+        sb += "Total chords analyzed: \(results.count)\n"
+
+        if !results.isEmpty {
+            sb += "Simplest chord: \(results[0].notes.joined(separator: " ")) "
+            sb += "(complexity \(String(format: "%.6f", results[0].complexity)))\n"
+            sb += "Most complex chord: \(results.last!.notes.joined(separator: " ")) "
+            sb += "(complexity \(String(format: "%.6f", results.last!.complexity)))\n"
+        }
+        sb += "\n"
+
+        sb += "Distribution by number of strings:\n"
+        for size in 2...numStrings {
+            let chordsOfSize = results.filter { $0.numStrings == size }
+            if !chordsOfSize.isEmpty {
+                let avgComplexity = chordsOfSize.reduce(0.0) { $0 + $1.complexity } / Double(chordsOfSize.count)
+                sb += "  \(size) strings: \(chordsOfSize.count) chords, "
+                sb += "avg complexity: \(String(format: "%.6f", avgComplexity))\n"
+            }
+        }
+        sb += "\n"
+
+        sb += String(repeating: "=", count: 100) + "\n"
+        sb += "Note: Complexity is related to dissonance, so a lower complexity score is related to higher\n"
+        sb += "consonance in this model.\n"
+        sb += "Based on https://github.com/threedlite/lyretune/blob/main/analyze_lyre_chords.py\n"
+        sb += String(repeating: "=", count: 100) + "\n"
+
+        return sb
+    }
+}
+
+// MARK: - Chord Analysis View
+
+struct ChordAnalysisView: View {
+    @ObservedObject var settings: SettingsManager
+    @Environment(\.presentationMode) var presentationMode
+    @State private var analysisResult = ""
+    @State private var isAnalyzing = false
+    @State private var errorMessage: String? = nil
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Current Settings Card
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Current Settings")
+                                .font(.headline)
+                                .padding(.bottom, 4)
+
+                            Text("Scale Type: \(settings.scaleTypeCategory.rawValue)")
+                            if settings.scaleTypeCategory == .modes {
+                                Text("Mode: \(settings.selectedMode.rawValue)")
+                            }
+                            if settings.scaleTypeCategory == .genres {
+                                Text("Genus: \(settings.selectedGenus.rawValue)")
+                            }
+                            Text("First Note: \(settings.firstNote)")
+                            Text("Number of Strings: \(settings.numberOfStrings)")
+                            Text("Temperament: \(settings.temperament.rawValue)")
+                            Text("Octave Offset: \(settings.octaveOffset)")
+                        }
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+
+                        // Error message for Equal temperament
+                        if let error = errorMessage {
+                            Text(error)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.red)
+                                .cornerRadius(8)
+                        }
+
+                        // Analyze button
+                        Button(action: analyzeChords) {
+                            HStack {
+                                if isAnalyzing {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .padding(.trailing, 8)
+                                }
+                                Text(isAnalyzing ? "Analyzing..." : "Analyze Chords")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background((settings.temperament == .equal || settings.numberOfStrings > 13) ? Color.gray : Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
+                        .disabled(isAnalyzing || settings.temperament == .equal || settings.numberOfStrings > 13)
+
+                        // Results
+                        if !analysisResult.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("Analysis Results")
+                                        .font(.headline)
+                                    Spacer()
+                                    Button(action: copyToClipboard) {
+                                        HStack {
+                                            Image(systemName: "doc.on.doc")
+                                            Text("Copy")
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(Color.blue)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(6)
+                                    }
+                                }
+
+                                ScrollView([.horizontal, .vertical]) {
+                                    Text(analysisResult)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .padding()
+                                }
+                                .frame(maxHeight: 500)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(8)
+
+                                Text("Long press to select text • Scroll horizontally and vertically")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle("Chord Analysis Tool")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            checkTemperament()
+        }
+        .onChange(of: settings.numberOfStrings) { _ in
+            checkTemperament()
+        }
+    }
+
+    private func checkTemperament() {
+        if settings.temperament == .equal {
+            errorMessage = "Non-rational tunings not supported, try Just Intonation"
+        } else if settings.numberOfStrings > 13 {
+            errorMessage = "Maximum 13 strings supported for chord analysis"
+        } else {
+            errorMessage = nil
+        }
+    }
+
+    private func analyzeChords() {
+        guard settings.temperament != .equal && settings.numberOfStrings <= 13 else { return }
+
+        isAnalyzing = true
+        errorMessage = nil
+
+        // Run analysis on background thread
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scaleData = settings.calculateScale()
+
+            let analyzer = LyreChordAnalyzer(scaleData: scaleData)
+            let results = analyzer.analyzeAllChords()
+            let formatted = analyzer.formatResults(results)
+
+            DispatchQueue.main.async {
+                analysisResult = formatted
+                isAnalyzing = false
+            }
+        }
+    }
+
+    private func copyToClipboard() {
+        #if os(iOS)
+        UIPasteboard.general.string = analysisResult
+        #endif
+    }
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
@@ -2032,6 +2547,7 @@ struct SettingsView: View {
     @State private var showingDeleteAlert = false
     @State private var profileToDelete = ""
     @State private var showingTranspositionTool = false
+    @State private var showingChordAnalysis = false
 
     private let notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     private let fftResolutionOptions = ["2048 (Fast)", "4096 (Balanced)", "8192 (High Res)", "16384 (Very High)", "32768 (Ultra)", "65536 (Maximum)"]
@@ -2048,6 +2564,24 @@ struct SettingsView: View {
                         Image(systemName: "music.note.list")
                             .font(.system(size: 20))
                         Text("Transposition Tool")
+                            .font(.headline)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 14))
+                    }
+                    .foregroundColor(.blue)
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                }
+
+                // Chord Analysis Tool Button
+                Button(action: {
+                    showingChordAnalysis = true
+                }) {
+                    HStack {
+                        Image(systemName: "chart.bar.doc.horizontal")
+                            .font(.system(size: 20))
+                        Text("Chord Analysis Tool")
                             .font(.headline)
                         Spacer()
                         Image(systemName: "chevron.right")
@@ -2234,8 +2768,14 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("3.0.8")
-                            .foregroundColor(.secondary)
+                        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                           let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String {
+                            Text("\(version) (\(build))")
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("3.0.10 (3)")
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Link("View License", destination: URL(string: "https://github.com/threedlite/lyretune/blob/main/LICENSE.txt")!)
@@ -2270,6 +2810,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingTranspositionTool) {
             TranspositionToolView()
+        }
+        .sheet(isPresented: $showingChordAnalysis) {
+            ChordAnalysisView(settings: settings)
         }
     }
 

@@ -104,9 +104,12 @@ fun ChordAnalysisScreen(context: Context, onBackPressed: () -> Unit) {
     val octaveOffset = sharedPrefs.getInt("octave_offset", 0)
 
     // Check if temperament is EQUAL and show error
-    LaunchedEffect(temperament) {
+    LaunchedEffect(temperament, numStrings) {
         if (temperament == Temperament.EQUAL) {
             errorMessage = "Non-rational tunings not supported, try Just Intonation"
+            analysisResult = ""
+        } else if (numStrings > 13) {
+            errorMessage = "Maximum 13 strings supported for chord analysis"
             analysisResult = ""
         } else {
             errorMessage = null
@@ -185,7 +188,7 @@ fun ChordAnalysisScreen(context: Context, onBackPressed: () -> Unit) {
             // Analyze button
             Button(
                 onClick = {
-                    if (temperament != Temperament.EQUAL) {
+                    if (temperament != Temperament.EQUAL && numStrings <= 13) {
                         coroutineScope.launch {
                             isAnalyzing = true
                             try {
@@ -205,7 +208,7 @@ fun ChordAnalysisScreen(context: Context, onBackPressed: () -> Unit) {
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !isAnalyzing && temperament != Temperament.EQUAL
+                enabled = !isAnalyzing && temperament != Temperament.EQUAL && numStrings <= 13
             ) {
                 Text(if (isAnalyzing) "Analyzing..." else "Analyze Chords")
             }
