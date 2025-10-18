@@ -594,7 +594,20 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             ) {
                 Text("Open Transposition Tool")
             }
-            
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Chord Analysis Tool Button
+            OutlinedButton(
+                onClick = {
+                    val intent = Intent(context, ChordAnalysisActivity::class.java)
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Open Chord Analysis Tool")
+            }
+
             Spacer(modifier = Modifier.height(16.dp))
             
             // Reset to Defaults Button

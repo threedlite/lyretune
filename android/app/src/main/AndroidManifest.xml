@@ -37,7 +37,12 @@
             android:name=".TranspositionActivity"
             android:exported="false"
             android:theme="@style/Theme.LyreTune" />
-        
+
+        <activity
+            android:name=".ChordAnalysisActivity"
+            android:exported="false"
+            android:theme="@style/Theme.LyreTune" />
+
     </application>
 
 </manifest>
