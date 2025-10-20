@@ -2,6 +2,10 @@
 """
 Analyze all possible chord progressions for each ancient Greek mode on a 7-string lyre.
 Considers voicing constraints, inversions, and voice leading.
+
+IMPORTANT: This analysis uses JUST INTONATION (pure integer frequency ratios),
+not equal temperament. This is critical for accurate consonance calculations
+on a lyre, which uses just-tuned strings.
 """
 
 import sys
@@ -149,7 +153,15 @@ class LyreVoicing:
 
 
 class LyreProgressionAnalyzer:
-    """Analyzes chord progressions for a given mode on a 7-string lyre."""
+    """Analyzes chord progressions for a given mode on a 7-string lyre.
+
+    Uses just intonation (pure integer frequency ratios) for accurate
+    consonance calculations. The complexity formula evaluates:
+    - Individual chord consonance (harmonic complexity)
+    - Voicing quality (root position vs inversions)
+    - Voice leading smoothness (string distances)
+    - Root movement strength (harmonic function)
+    """
 
     def __init__(self, mode_name, complexity_params=None):
         """
@@ -162,6 +174,20 @@ class LyreProgressionAnalyzer:
 
         # Get mode pattern
         self.scale_semitones = LyreChordAnalyzer.MODES[mode_name]
+
+        # Create a LyreChordAnalyzer instance to get just intonation frequencies
+        # We need to determine the first note based on the mode
+        # Using E4 as default starting note (works well for most modes)
+        self.chord_analyzer = LyreChordAnalyzer(
+            num_strings=7,
+            mode=mode_name,
+            first_note='E',
+            temperament='JUST',
+            formula='NUMERIC_EMPIRIC_20251018'
+        )
+
+        # Store the just intonation frequencies for each string
+        self.just_frequencies = self.chord_analyzer.frequencies
 
         # Build interval pattern
         self.interval_pattern = self._build_interval_pattern()
@@ -278,15 +304,12 @@ class LyreProgressionAnalyzer:
 
         # Individual chord complexities
         for voicing in voicing_sequence:
-            # Get frequency ratios for this voicing
-            # Use the chord complexity from the existing formula
-            # Simplified: use the triad's semitone pattern
-            triad = voicing.triad
+            # Get actual just intonation frequencies for this voicing
+            # voicing.string_indices are 1-indexed, so subtract 1 for array access
+            freqs = [self.just_frequencies[idx - 1] for idx in voicing.string_indices]
 
-            # Convert semitones to ratio (simplified)
-            # This is approximate - using equal temperament approximation
-            freqs = [440 * (2 ** (st / 12)) for st in voicing.semitones]
-            ratios = self._frequencies_to_ratios(freqs)
+            # Convert frequencies to integer ratios using the parent class method
+            ratios = self.chord_analyzer.frequencies_to_ratios(freqs)
 
             chord_complexity = complexity_with_five_adjustments(ratios, **self.params)
             complexity += chord_complexity
@@ -311,28 +334,6 @@ class LyreProgressionAnalyzer:
             complexity += root_complexity
 
         return complexity
-
-    def _frequencies_to_ratios(self, freqs):
-        """Convert frequencies to integer ratios."""
-        if not freqs:
-            return ()
-
-        from math import gcd
-        from functools import reduce
-
-        # Normalize to lowest frequency
-        min_freq = min(freqs)
-        ratios = [f / min_freq for f in freqs]
-
-        # Convert to integers
-        precision = 10000
-        int_ratios = [int(round(r * precision)) for r in ratios]
-
-        # Reduce by GCD
-        g = reduce(gcd, int_ratios)
-        int_ratios = tuple(r // g for r in int_ratios)
-
-        return int_ratios
 
     def generate_progressions(self, min_length=2, max_length=4, max_results=100):
         """
