@@ -619,7 +619,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Suggest Chord Progressions")
+                    Text("Suggest Chord Progressions (Beta)")
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

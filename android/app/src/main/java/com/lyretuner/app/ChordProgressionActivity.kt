@@ -295,7 +295,7 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Prioritize common modern Western cadences:",
+                            text = "Prioritize common modern Western cadences (Just):",
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Switch(

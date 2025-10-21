@@ -3390,7 +3390,7 @@ struct ChordProgressionView: View {
                             }
 
                             // Sort by cadence toggle
-                            Toggle("Prioritize common modern Western cadences", isOn: $sortByCadence)
+                            Toggle("Prioritize common modern Western cadences (Just)", isOn: $sortByCadence)
                                 .padding(.top, 8)
                         }
                         .padding()
@@ -4119,7 +4119,7 @@ struct SettingsView: View {
                         HStack {
                             Image(systemName: "music.quarternote.3")
                                 .font(.system(size: 20))
-                            Text("Suggest Chord Progressions")
+                            Text("Suggest Chord Progressions (Beta)")
                                 .font(.headline)
                             Spacer()
                             Image(systemName: "chevron.right")
