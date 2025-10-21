@@ -609,6 +609,21 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Chord Progression Tool Button (only for Modes)
+            if (scaleType == 0) {
+                OutlinedButton(
+                    onClick = {
+                        val intent = Intent(context, ChordProgressionActivity::class.java)
+                        context.startActivity(intent)
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Suggest Chord Progressions")
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
             
             // Reset to Defaults Button
             Button(

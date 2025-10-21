@@ -1707,12 +1707,31 @@ class TranspositionPlaybackManager: ObservableObject {
                 return
             }
 
-            let frequency = noteToFrequency(note)
-            if frequency > 0 && frequency < 20000 {  // Sanity check
-                playTone(frequency: frequency, duration: noteDuration, sampleRate: sampleRate)
-                try? await Task.sleep(nanoseconds: UInt64(pauseDuration * 1_000_000_000))
+            // Check if this is a chord (contains hyphens)
+            if note.contains("-") {
+                // Parse chord into individual notes
+                let chordNotes = note.split(separator: "-").map(String.init)
+                let frequencies = chordNotes.compactMap { singleNote -> Double? in
+                    let freq = noteToFrequency(singleNote)
+                    return (freq > 0 && freq < 20000) ? freq : nil
+                }
+
+                if !frequencies.isEmpty {
+                    playChord(frequencies: frequencies, duration: noteDuration, sampleRate: sampleRate)
+                    try? await Task.sleep(nanoseconds: UInt64(pauseDuration * 1_000_000_000))
+                }
+            } else {
+                // Single note
+                let frequency = noteToFrequency(note)
+                if frequency > 0 && frequency < 20000 {  // Sanity check
+                    playTone(frequency: frequency, duration: noteDuration, sampleRate: sampleRate)
+                    try? await Task.sleep(nanoseconds: UInt64(pauseDuration * 1_000_000_000))
+                }
             }
         }
+
+        // Wait for the last note to finish playing
+        try? await Task.sleep(nanoseconds: UInt64((noteDuration + pauseDuration) * 1_000_000_000))
 
         playerNode.stop()
         await MainActor.run { self.isPlaying = false }
@@ -1745,6 +1764,59 @@ class TranspositionPlaybackManager: ObservableObject {
             // Generate tone
             let sample = sin(2.0 * .pi * frequency * t) * envelope
             channelData[0][frame] = Float(sample * 0.6)  // Increased volume for physical device
+        }
+
+        let semaphore = DispatchSemaphore(value: 0)
+
+        playerNode.scheduleBuffer(buffer, at: nil, options: []) {
+            semaphore.signal()
+        }
+
+        _ = semaphore.wait(timeout: .now() + duration + 0.1)
+    }
+
+    private func playChord(frequencies: [Double], duration: Double, sampleRate: Double) {
+        guard !frequencies.isEmpty else { return }
+
+        // If only one frequency, just play a single tone
+        if frequencies.count == 1 {
+            playTone(frequency: frequencies[0], duration: duration, sampleRate: sampleRate)
+            return
+        }
+
+        let numSamples = Int(sampleRate * duration)
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
+            return
+        }
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(numSamples)) else {
+            return
+        }
+
+        buffer.frameLength = AVAudioFrameCount(numSamples)
+
+        guard let channelData = buffer.floatChannelData else { return }
+
+        // Reduce amplitude based on number of notes to avoid clipping
+        let amplitude = 0.6 / Double(frequencies.count)
+
+        // Generate mixed tones with envelope
+        for frame in 0..<numSamples {
+            let t = Double(frame) / sampleRate
+
+            // Simple envelope for smoother sound
+            let attack = min(t / 0.01, 1.0)  // 10ms attack
+            let release = max(0, min(1.0, (duration - t) / 0.01))  // 10ms release
+            let envelope = attack * release
+
+            // Mix all frequencies together
+            var mixedSample = 0.0
+            for frequency in frequencies {
+                mixedSample += sin(2.0 * .pi * frequency * t) * amplitude
+            }
+
+            channelData[0][frame] = Float(mixedSample * envelope)
         }
 
         let semaphore = DispatchSemaphore(value: 0)
@@ -1950,6 +2022,20 @@ struct TranspositionToolView: View {
     private func transposeNote(_ note: String, semitones: Int) -> String {
         if note.isEmpty { return note }
 
+        // Check if this is a chord (contains hyphens)
+        if note.contains("-") {
+            // Split chord into individual notes, transpose each, and rejoin
+            let notes = note.split(separator: "-").map(String.init)
+            return notes.map { transposeSingleNote($0, semitones: semitones) }.joined(separator: "-")
+        }
+
+        // Single note - transpose normally
+        return transposeSingleNote(note, semitones: semitones)
+    }
+
+    private func transposeSingleNote(_ note: String, semitones: Int) -> String {
+        if note.isEmpty { return note }
+
         // Parse note (e.g., "C#4", "Bb3", "F5")
         let pattern = "^([A-G])([#b]*)([0-9])$"
         guard let regex = try? NSRegularExpression(pattern: pattern),
@@ -1986,8 +2072,21 @@ struct TranspositionToolView: View {
     }
 
     private func getUniqueNotes(from notes: String) -> String {
-        let noteArray = notes.split(separator: " ").map(String.init)
-        let uniqueSet = Set(noteArray)
+        let tokens = notes.split(separator: " ").map(String.init)
+        var allNotes: [String] = []
+
+        // Extract all notes from tokens (including notes within chords)
+        for token in tokens {
+            if token.contains("-") {
+                // Split chord into individual notes
+                let chordNotes = token.split(separator: "-").map(String.init)
+                allNotes.append(contentsOf: chordNotes)
+            } else {
+                allNotes.append(token)
+            }
+        }
+
+        let uniqueSet = Set(allNotes)
 
         // Sort by frequency (MIDI note number)
         let sorted = uniqueSet.sorted { note1, note2 in

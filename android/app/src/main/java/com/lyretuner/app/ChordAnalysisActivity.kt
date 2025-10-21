@@ -335,8 +335,8 @@ class LyreChordAnalyzer(
     temperament: Temperament,
     octaveOffset: Int
 ) {
-    private val frequencies: List<Float>
-    private val noteNames: List<String>
+    val frequencies: List<Float>  // Made public for use by LyreProgressionAnalyzer
+    val noteNames: List<String>   // Made public for use by LyreProgressionAnalyzer
 
     // Formula parameters (from NUMERIC_EMPIRIC_20251018)
     private val augmentedPenalty = 0.6
@@ -416,7 +416,7 @@ class LyreChordAnalyzer(
         return result
     }
 
-    private fun frequenciesToRatios(freqs: List<Float>): List<Int> {
+    fun frequenciesToRatios(freqs: List<Float>): List<Int> {
         if (freqs.isEmpty()) return emptyList()
 
         val minFreq = freqs.minOrNull() ?: return emptyList()
@@ -487,7 +487,7 @@ class LyreChordAnalyzer(
         return num
     }
 
-    private fun complexityWithFiveAdjustments(notes: List<Int>): Double {
+    fun complexityWithFiveAdjustments(notes: List<Int>): Double {
         val intervalOls = mutableListOf<Int>()
         val intervalLps = mutableListOf<Int>()
         val intervalMinOddLps = mutableListOf<Int>()

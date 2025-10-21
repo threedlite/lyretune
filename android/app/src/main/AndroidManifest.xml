@@ -43,6 +43,11 @@
             android:exported="false"
             android:theme="@style/Theme.LyreTune" />
 
+        <activity
+            android:name=".ChordProgressionActivity"
+            android:exported="false"
+            android:theme="@style/Theme.LyreTune" />
+
     </application>
 
 </manifest>

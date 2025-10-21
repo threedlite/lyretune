@@ -112,7 +112,7 @@ fun TranspositionScreen(onBackPressed: () -> Unit) {
                 value = inputText,
                 onValueChange = { inputText = it },
                 label = { Text("Input Notes") },
-                placeholder = { Text("Enter notes like: A3 Bb3 C#4 D4") },
+                placeholder = { Text("Enter notes like: A3 Bb3 C#4 D4\nChords like: C4-E4-G4 F3-A3-C4") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(200.dp),
@@ -320,19 +320,35 @@ fun transposeNotes(input: String, semitones: Int): String {
 
 fun transposeNote(note: String, semitones: Int): String {
     if (note.isBlank()) return note
-    
+
+    // Check if this is a chord (contains hyphens)
+    if (note.contains("-")) {
+        // Split chord into individual notes, transpose each, and rejoin
+        val notes = note.split("-")
+        return notes.joinToString("-") { singleNote ->
+            transposeSingleNote(singleNote, semitones)
+        }
+    }
+
+    // Single note - transpose normally
+    return transposeSingleNote(note, semitones)
+}
+
+fun transposeSingleNote(note: String, semitones: Int): String {
+    if (note.isBlank()) return note
+
     // Parse the note
     val parsed = parseNote(note)
     if (parsed == null) return note // Return unchanged if parsing fails
-    
+
     val (noteName, accidental, octave) = parsed
-    
+
     // Convert to MIDI note number
     val baseNotes = mapOf(
         'C' to 0, 'D' to 2, 'E' to 4, 'F' to 5,
         'G' to 7, 'A' to 9, 'B' to 11
     )
-    
+
     val baseMidi = baseNotes[noteName] ?: return note
     val accidentalOffset = when (accidental) {
         "#" -> 1
@@ -341,13 +357,13 @@ fun transposeNote(note: String, semitones: Int): String {
         "bb" -> -2
         else -> 0
     }
-    
+
     // Calculate MIDI note number (C4 = 60)
     var midiNote = (octave + 1) * 12 + baseMidi + accidentalOffset
-    
+
     // Apply transposition
     midiNote += semitones
-    
+
     // Convert back to note name
     return midiToNote(midiNote)
 }
@@ -425,24 +441,50 @@ suspend fun playNotes(notesString: String, onTrackCreated: (AudioTrack) -> Unit)
         try {
             audioTrack.play()
             
-            // Play each note
+            // Play each note or chord
             for (note in notes) {
                 try {
-                    val frequency = noteToFrequency(note)
-                    if (frequency > 0 && frequency < 20000) { // Sanity check frequency
-                        // Generate and play tone
-                        val samples = generateTone(frequency, noteDuration, sampleRate)
-                        audioTrack.write(samples, 0, samples.size)
-                        
-                        // Add pause between notes
-                        val pauseSamples = ShortArray((pauseDuration * sampleRate).toInt())
-                        audioTrack.write(pauseSamples, 0, pauseSamples.size)
+                    // Check if this is a chord (contains hyphens)
+                    if (note.contains("-")) {
+                        // Parse chord into individual notes
+                        val chordNotes = note.split("-").filter { it.isNotBlank() }
+                        val frequencies = chordNotes.mapNotNull { singleNote ->
+                            val freq = noteToFrequency(singleNote)
+                            if (freq > 0 && freq < 20000) freq else null
+                        }
+
+                        if (frequencies.isNotEmpty()) {
+                            // Generate and play chord (mixed tones)
+                            val samples = generateChord(frequencies, noteDuration, sampleRate)
+                            audioTrack.write(samples, 0, samples.size)
+
+                            // Add pause between notes/chords
+                            val pauseSamples = ShortArray((pauseDuration * sampleRate).toInt())
+                            audioTrack.write(pauseSamples, 0, pauseSamples.size)
+                        }
+                    } else {
+                        // Single note
+                        val frequency = noteToFrequency(note)
+                        if (frequency > 0 && frequency < 20000) { // Sanity check frequency
+                            // Generate and play tone
+                            val samples = generateTone(frequency, noteDuration, sampleRate)
+                            audioTrack.write(samples, 0, samples.size)
+
+                            // Add pause between notes
+                            val pauseSamples = ShortArray((pauseDuration * sampleRate).toInt())
+                            audioTrack.write(pauseSamples, 0, pauseSamples.size)
+                        }
                     }
                 } catch (e: Exception) {
                     // Skip invalid note and continue
                     e.printStackTrace()
                 }
             }
+
+            // Wait for the last note to finish playing
+            // Calculate total time for last note + pause
+            val finalWaitTime = ((noteDuration + pauseDuration) * 1000).toLong()
+            Thread.sleep(finalWaitTime)
         } finally {
             try {
                 audioTrack.stop()
@@ -483,21 +525,25 @@ fun noteToFrequency(note: String): Double {
 }
 
 fun getUniqueNotesSortedByFrequency(notesString: String): String {
-    val notes = notesString.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-    if (notes.isEmpty()) return ""
-    
+    val tokens = notesString.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+    if (tokens.isEmpty()) return ""
+
     // Create a map of note to frequency for unique notes
     val noteFrequencyMap = mutableMapOf<String, Double>()
-    
-    for (note in notes) {
-        if (!noteFrequencyMap.containsKey(note)) {
-            val frequency = noteToFrequency(note)
-            if (frequency > 0) {
-                noteFrequencyMap[note] = frequency
+
+    for (token in tokens) {
+        // Split by hyphen to handle chords
+        val notes = token.split("-").filter { it.isNotBlank() }
+        for (note in notes) {
+            if (!noteFrequencyMap.containsKey(note)) {
+                val frequency = noteToFrequency(note)
+                if (frequency > 0) {
+                    noteFrequencyMap[note] = frequency
+                }
             }
         }
     }
-    
+
     // Sort by frequency (ascending) and return as space-separated string
     return noteFrequencyMap.entries
         .sortedBy { it.value }
@@ -511,11 +557,11 @@ fun generateTone(frequency: Double, duration: Double, sampleRate: Int): ShortArr
     val amplitude = 0.7 // Reduce amplitude to avoid clipping
     val fadeInSamples = (0.01 * sampleRate).toInt() // 10ms fade in
     val fadeOutSamples = (0.05 * sampleRate).toInt() // 50ms fade out
-    
+
     for (i in 0 until numSamples) {
         val angle = 2.0 * PI * i * frequency / sampleRate
         var sample = sin(angle) * amplitude
-        
+
         // Apply fade in
         if (i < fadeInSamples) {
             sample *= i.toDouble() / fadeInSamples
@@ -524,9 +570,45 @@ fun generateTone(frequency: Double, duration: Double, sampleRate: Int): ShortArr
         else if (i >= numSamples - fadeOutSamples) {
             sample *= (numSamples - i).toDouble() / fadeOutSamples
         }
-        
+
         samples[i] = (sample * Short.MAX_VALUE).toInt().toShort()
     }
-    
+
+    return samples
+}
+
+fun generateChord(frequencies: List<Double>, duration: Double, sampleRate: Int): ShortArray {
+    if (frequencies.isEmpty()) return ShortArray(0)
+    if (frequencies.size == 1) return generateTone(frequencies[0], duration, sampleRate)
+
+    val numSamples = (duration * sampleRate).toInt()
+    val samples = ShortArray(numSamples)
+    val fadeInSamples = (0.01 * sampleRate).toInt() // 10ms fade in
+    val fadeOutSamples = (0.05 * sampleRate).toInt() // 50ms fade out
+
+    // Reduce amplitude based on number of notes to avoid clipping
+    val amplitude = 0.7 / frequencies.size
+
+    for (i in 0 until numSamples) {
+        var mixedSample = 0.0
+
+        // Mix all frequencies together
+        for (frequency in frequencies) {
+            val angle = 2.0 * PI * i * frequency / sampleRate
+            mixedSample += sin(angle) * amplitude
+        }
+
+        // Apply fade in
+        if (i < fadeInSamples) {
+            mixedSample *= i.toDouble() / fadeInSamples
+        }
+        // Apply fade out
+        else if (i >= numSamples - fadeOutSamples) {
+            mixedSample *= (numSamples - i).toDouble() / fadeOutSamples
+        }
+
+        samples[i] = (mixedSample * Short.MAX_VALUE).toInt().toShort()
+    }
+
     return samples
 }
