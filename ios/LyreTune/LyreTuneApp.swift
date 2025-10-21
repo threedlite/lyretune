@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import Accelerate
+import UIKit
 
 // MARK: - Models
 
@@ -2222,7 +2223,7 @@ class LyreChordAnalyzer {
         }
     }
 
-    private func frequenciesToRatios(freqs: [Float]) -> [Int] {
+    func frequenciesToRatios(freqs: [Float]) -> [Int] {
         guard !freqs.isEmpty, let minFreq = freqs.min() else { return [] }
 
         let ratios = freqs.map { $0 / minFreq }
@@ -2277,7 +2278,7 @@ class LyreChordAnalyzer {
         return num
     }
 
-    private func complexityWithFiveAdjustments(notes: [Int]) -> Double {
+    func complexityWithFiveAdjustments(notes: [Int]) -> Double {
         var intervalOls: [Int] = []
         var intervalLps: [Int] = []
         var intervalMinOddLps: [Int] = []
@@ -2478,6 +2479,1424 @@ class LyreChordAnalyzer {
     }
 }
 
+// MARK: - Chord Progression Support
+
+// Constants for chord progression analysis
+let DYAD_SIZE = 2
+let TRIAD_SIZE = 3
+let TETRAD_SIZE = 4
+let MIN_STRINGS_FOR_TRIADS = 4
+let MAX_STRINGS_SUPPORTED = 9
+
+let INVERSION_PENALTIES: [String: Double] = [
+    "root": 0.0,
+    "1st": 1.5,
+    "2nd": 2.0,
+    "3rd": 2.0,
+    "unk": 3.0
+]
+let CROSSED_VOICES_PENALTY = 1.0
+let VOICE_LEADING_WEIGHT = 0.5
+let COMMON_TONE_BONUS = -0.5
+
+let ROOT_MOVEMENT_STRENGTH: [Int: Double] = [
+    0: 0.0,   // No movement
+    3: -1.5,  // V→I (authentic cadence) - STRONGEST
+    4: -0.3,  // IV→I (plagal) and I→V (half) - mixed
+    5: -0.5,  // Ascending 5th
+    2: 0.3,   // Stepwise
+    6: 1.5,   // Tritone
+    1: 0.8    // Half step
+]
+
+// Mode semitone patterns
+let MODE_SEMITONES: [Mode: [Int]] = [
+    .dorios: [0, 1, 3, 5, 7, 8, 10],      // Ancient Dorios = Modern Phrygian
+    .phrygios: [0, 2, 3, 5, 7, 9, 10],    // Ancient Phrygios = Modern Dorian
+    .lydios: [0, 2, 4, 5, 7, 9, 11],      // Ancient Lydios = Modern Ionian
+    .mixolydios: [0, 1, 3, 5, 6, 8, 10],  // Ancient Mixolydios = Modern Locrian
+    .hypodorios: [0, 2, 3, 5, 7, 8, 10],  // Ancient Hypodorios = Modern Aeolian
+    .hypolydios: [0, 2, 4, 6, 7, 9, 11],  // Ancient Hypolydios = Modern Lydian
+    .hypophrygios: [0, 2, 4, 5, 7, 9, 10] // Ancient Hypophrygios = Modern Mixolydian
+]
+
+let ANCIENT_TO_MODERN_MODE: [Mode: String] = [
+    .dorios: "Phrygian",
+    .phrygios: "Dorian",
+    .lydios: "Ionian",
+    .mixolydios: "Locrian",
+    .hypodorios: "Aeolian",
+    .hypolydios: "Lydian",
+    .hypophrygios: "Mixolydian"
+]
+
+// Chord class
+class LyreChord {
+    let rootDegree: Int
+    let scaleSemitones: [Int]
+    let rootSemitone: Int
+    let size: Int
+    let mode: Mode?
+    let degrees: [Int]
+    let semitones: [Int]
+    let quality: String
+
+    init(rootDegree: Int, scaleSemitones: [Int], rootSemitone: Int, size: Int = 3, mode: Mode? = nil) {
+        self.rootDegree = rootDegree
+        self.scaleSemitones = scaleSemitones
+        self.rootSemitone = rootSemitone
+        self.size = size
+        self.mode = mode
+
+        // Build chord based on size
+        let degreeOffsets: [Int]
+        switch size {
+        case DYAD_SIZE:
+            degreeOffsets = [0, 2]
+        case TRIAD_SIZE:
+            degreeOffsets = [0, 2, 4]
+        case TETRAD_SIZE:
+            degreeOffsets = [0, 2, 4, 6]
+        default:
+            degreeOffsets = [0, 2, 4]
+        }
+
+        self.degrees = degreeOffsets.map { (rootDegree + $0) % 7 }
+        self.semitones = LyreChord.getChordSemitones(degrees: degrees, rootDegree: rootDegree, scaleSemitones: scaleSemitones)
+
+        // Determine quality
+        self.quality = LyreChord.determineQuality(size: size, semitones: semitones)
+    }
+
+    static func getChordSemitones(degrees: [Int], rootDegree: Int, scaleSemitones: [Int]) -> [Int] {
+        return degrees.map { deg in
+            var st = scaleSemitones[deg]
+            if deg < rootDegree {
+                st += 12 // Next octave
+            }
+            return st
+        }
+    }
+
+    static func determineQuality(size: Int, semitones: [Int]) -> String {
+        switch size {
+        case DYAD_SIZE:
+            let interval = semitones[1] - semitones[0]
+            return DYAD_QUALITIES[interval] ?? "\(interval)st"
+        case TRIAD_SIZE:
+            let third = semitones[1] - semitones[0]
+            let fifth = semitones[2] - semitones[0]
+            return TRIAD_QUALITIES["\(third),\(fifth)"] ?? "unk"
+        case TETRAD_SIZE:
+            let third = semitones[1] - semitones[0]
+            let fifth = semitones[2] - semitones[0]
+            let seventh = semitones[3] - semitones[0]
+            return TETRAD_QUALITIES["\(third),\(fifth),\(seventh)"] ?? "unk"
+        default:
+            return "unk"
+        }
+    }
+
+    func toRomanNumeral() -> String {
+        // Use mode-aware Roman numerals if mode is provided
+        let roman: String
+        if size == DYAD_SIZE {
+            // Dyads use simple Roman numeral with interval quality (like Android)
+            let baseRoman = getSimpleRoman()
+            roman = "\(baseRoman)-\(quality)"
+        } else if let mode = mode, size == TRIAD_SIZE {
+            let modeNumerals: [[String]] = [
+                ["i°", "♭II", "♭iii", "iv", "♭V", "♭VI", "♭vii"],  // Mixolydios (Locrian)
+                ["i", "ii°", "♭III", "iv", "v", "♭VI", "♭VII"],      // Hypodorios (Aeolian)
+                ["I", "ii", "iii", "IV", "V", "vi", "vii°"],         // Lydios (Ionian)
+                ["i", "ii", "♭III", "IV", "v", "vi°", "♭VII"],       // Phrygios (Dorian)
+                ["i", "♭II", "♭III", "iv", "v°", "♭VI", "♭vii"],     // Dorios (Phrygian)
+                ["I", "II", "iii", "♯iv°", "V", "vi", "vii"],        // Hypolydios (Lydian)
+                ["I", "ii", "iii°", "IV", "v", "vi", "♭VII"]         // Hypophrygios (Mixolydian)
+            ]
+            let modeIndex = mode.toInt()
+            roman = modeNumerals[modeIndex][rootDegree]
+        } else if let mode = mode, size == TETRAD_SIZE {
+            // For tetrads, use mode-aware base numeral but remove ° (like Android)
+            let modeNumerals: [[String]] = [
+                ["i°", "♭II", "♭iii", "iv", "♭V", "♭VI", "♭vii"],  // Mixolydios (Locrian)
+                ["i", "ii°", "♭III", "iv", "v", "♭VI", "♭VII"],      // Hypodorios (Aeolian)
+                ["I", "ii", "iii", "IV", "V", "vi", "vii°"],         // Lydios (Ionian)
+                ["i", "ii", "♭III", "IV", "v", "vi°", "♭VII"],       // Phrygios (Dorian)
+                ["i", "♭II", "♭III", "iv", "v°", "♭VI", "♭vii"],     // Dorios (Phrygian)
+                ["I", "II", "iii", "♯iv°", "V", "vi", "vii"],        // Hypolydios (Lydian)
+                ["I", "ii", "iii°", "IV", "v", "vi", "♭VII"]         // Hypophrygios (Mixolydian)
+            ]
+            let modeIndex = mode.toInt()
+            let baseRoman = modeNumerals[modeIndex][rootDegree].replacingOccurrences(of: "°", with: "")
+            // Use standard music theory notation for seventh chords
+            switch quality {
+            case "maj7":
+                roman = "\(baseRoman)maj7"
+            case "dom7":
+                roman = "\(baseRoman)7"
+            case "min7":
+                roman = "\(baseRoman.lowercased())7"
+            case "halfdim7":
+                roman = "\(baseRoman.lowercased())ø7"
+            case "dim7":
+                roman = "\(baseRoman.lowercased())°7"
+            default:
+                roman = "\(baseRoman)?\(size)"
+            }
+        } else {
+            roman = getSimpleRoman()
+        }
+
+        return roman
+    }
+
+    private func getSimpleRoman() -> String {
+        let romans = ["I", "II", "III", "IV", "V", "VI", "VII"]
+        return romans[rootDegree]
+    }
+
+    static let DYAD_QUALITIES: [Int: String] = [
+        1: "m2", 2: "M2", 3: "m3", 4: "M3", 5: "P4",
+        6: "TT", 7: "P5", 8: "m6", 9: "M6", 10: "m7", 11: "M7"
+    ]
+
+    static let TRIAD_QUALITIES: [String: String] = [
+        "4,7": "maj",
+        "3,7": "min",
+        "3,6": "dim",
+        "4,8": "aug"
+    ]
+
+    static let TETRAD_QUALITIES: [String: String] = [
+        "4,7,11": "maj7",
+        "4,7,10": "dom7",
+        "3,7,10": "min7",
+        "3,6,10": "halfdim7",
+        "3,6,9": "dim7"
+    ]
+}
+
+// Lyre Voicing class
+class LyreVoicing {
+    let chord: LyreChord
+    let stringIndices: [Int]  // 1-indexed
+    let semitones: [Int]
+    let inversion: String
+    let isAscending: Bool
+
+    init(chord: LyreChord, stringIndices: [Int], semitones: [Int]) {
+        self.chord = chord
+        self.stringIndices = stringIndices
+        self.semitones = semitones
+
+        // Determine inversion
+        let rootMod = chord.semitones[0] % 12
+        let bassMod = semitones[0] % 12
+
+        switch chord.size {
+        case DYAD_SIZE:
+            self.inversion = (bassMod == rootMod) ? "root" : "1st"
+        case TRIAD_SIZE:
+            if bassMod == rootMod {
+                self.inversion = "root"
+            } else if bassMod == chord.semitones[1] % 12 {
+                self.inversion = "1st"
+            } else if bassMod == chord.semitones[2] % 12 {
+                self.inversion = "2nd"
+            } else {
+                self.inversion = "unk"
+            }
+        case TETRAD_SIZE:
+            if bassMod == rootMod {
+                self.inversion = "root"
+            } else if bassMod == chord.semitones[1] % 12 {
+                self.inversion = "1st"
+            } else if bassMod == chord.semitones[2] % 12 {
+                self.inversion = "2nd"
+            } else if bassMod == chord.semitones[3] % 12 {
+                self.inversion = "3rd"
+            } else {
+                self.inversion = "unk"
+            }
+        default:
+            self.inversion = "unk"
+        }
+
+        // Check if ascending
+        var ascending = true
+        for i in 0..<semitones.count-1 {
+            if semitones[i] >= semitones[i+1] {
+                ascending = false
+                break
+            }
+        }
+        self.isAscending = ascending
+    }
+
+    func voicingPenalty() -> Double {
+        let penalty: Double
+        if chord.size == TETRAD_SIZE && inversion == "3rd" {
+            penalty = INVERSION_PENALTIES["2nd"] ?? 2.0
+        } else {
+            penalty = INVERSION_PENALTIES[inversion] ?? 3.0
+        }
+
+        return penalty + (isAscending ? 0.0 : CROSSED_VOICES_PENALTY)
+    }
+}
+
+// Progression class
+class LyreProgression {
+    let complexity: Double
+    let voicings: [LyreVoicing]
+    let chords: [LyreChord]
+    var commonName: String?
+
+    init(complexity: Double, voicings: [LyreVoicing], chords: [LyreChord], commonName: String? = nil) {
+        self.complexity = complexity
+        self.voicings = voicings
+        self.chords = chords
+        self.commonName = commonName
+    }
+}
+
+// Lyre Progression Analyzer
+class LyreProgressionAnalyzer {
+    let mode: Mode
+    let firstNote: String
+    let numStrings: Int
+    let temperament: Temperament
+    let octaveOffset: Int
+    let scaleSemitones: [Int]
+    let frequencies: [Double]
+    let noteNames: [String]
+    let chordAnalyzer: LyreChordAnalyzer
+    let chords: [LyreChord]
+    let voicings: [String: [LyreVoicing]]  // Key: "degree,size"
+
+    init(mode: Mode, firstNote: String, numStrings: Int, temperament: Temperament, octaveOffset: Int, scaleData: SettingsManager.ScaleData, chordAnalyzer: LyreChordAnalyzer) {
+        self.mode = mode
+        self.firstNote = firstNote
+        self.numStrings = numStrings
+        self.temperament = temperament
+        self.octaveOffset = octaveOffset
+        self.scaleSemitones = MODE_SEMITONES[mode] ?? [0, 2, 4, 5, 7, 9, 11]
+        self.frequencies = scaleData.frequencies
+        self.noteNames = scaleData.notes
+        self.chordAnalyzer = chordAnalyzer
+
+        // Build chords
+        var chordList: [LyreChord] = []
+        let chordSizes = numStrings <= 4 ? [DYAD_SIZE] : (numStrings >= 7 ? [TRIAD_SIZE, TETRAD_SIZE, DYAD_SIZE] : [TRIAD_SIZE, DYAD_SIZE])
+
+        for size in chordSizes {
+            for degree in 0...6 {
+                let chord = LyreChord(rootDegree: degree, scaleSemitones: scaleSemitones, rootSemitone: scaleSemitones[degree], size: size, mode: mode)
+                chordList.append(chord)
+            }
+        }
+        self.chords = chordList
+
+        // Build voicings
+        self.voicings = Self.buildVoicings(chords: chordList, numStrings: numStrings, scaleSemitones: scaleSemitones)
+    }
+
+    static func buildVoicings(chords: [LyreChord], numStrings: Int, scaleSemitones: [Int]) -> [String: [LyreVoicing]] {
+        var voicingsByChord: [String: [LyreVoicing]] = [:]
+
+        for chord in chords {
+            var voicingList: [LyreVoicing] = []
+
+            // Try all combinations
+            let combinations = generateCombinations(n: numStrings, k: chord.size)
+            for strings in combinations {
+                // Get semitones played
+                let scaleLength = scaleSemitones.count
+                let semitones = strings.map { s -> Int in
+                    let degree = s % scaleLength
+                    let octave = s / scaleLength
+                    return scaleSemitones[degree] + (octave * 12)
+                }
+
+                // Check if valid voicing
+                if isValidVoicing(semitones: semitones, chord: chord) {
+                    let voicing = LyreVoicing(chord: chord, stringIndices: strings.map { $0 + 1 }, semitones: semitones)
+                    voicingList.append(voicing)
+                }
+            }
+
+            let key = "\(chord.rootDegree),\(chord.size)"
+            voicingsByChord[key] = voicingList
+        }
+
+        return voicingsByChord
+    }
+
+    static func isValidVoicing(semitones: [Int], chord: LyreChord) -> Bool {
+        let chordNotes = Set(chord.semitones.map { $0 % 12 })
+        let playedNotes = Set(semitones.map { $0 % 12 })
+        return playedNotes == chordNotes
+    }
+
+    static func generateCombinations(n: Int, k: Int) -> [[Int]] {
+        var result: [[Int]] = []
+
+        func backtrack(start: Int, current: [Int]) {
+            if current.count == k {
+                result.append(current)
+                return
+            }
+
+            for i in start..<n {
+                backtrack(start: i + 1, current: current + [i])
+            }
+        }
+
+        backtrack(start: 0, current: [])
+        return result
+    }
+
+    func generateProgressions(length: Int, chordSizes: Set<Int>, maxResults: Int = 100, timeoutSeconds: Double = 30.0, startTime: Date = Date()) -> (progressions: [LyreProgression], isPartial: Bool) {
+        var progressionList: [LyreProgression] = []
+        var isPartial = false
+
+        // Filter chords by size
+        let availableChords = chords.filter { chordSizes.contains($0.size) }.map { ($0.rootDegree, $0.size) }
+
+        if availableChords.isEmpty {
+            return ([], false)
+        }
+
+        // Generate all chord sequences (no limit to match Android behavior)
+        let chordSequences = generateChordSequences(availableChords: availableChords, length: length)
+
+        for chordSequence in chordSequences {
+            // Skip consecutive identical chords
+            var hasConsecutive = false
+            for i in 0..<chordSequence.count-1 {
+                if chordSequence[i] == chordSequence[i+1] {
+                    hasConsecutive = true
+                    break
+                }
+            }
+            if hasConsecutive { continue }
+
+            // For 4-chord sequences, skip if first pair equals second pair
+            if length == 4 && chordSequence.count == 4 {
+                if chordSequence[0] == chordSequence[2] && chordSequence[1] == chordSequence[3] {
+                    continue
+                }
+            }
+
+            // Get voicing options
+            var voicingOptions: [[LyreVoicing]] = []
+            var hasEmptyVoicing = false
+            for (degree, size) in chordSequence {
+                let key = "\(degree),\(size)"
+                if let vList = voicings[key], !vList.isEmpty {
+                    voicingOptions.append(vList)
+                } else {
+                    hasEmptyVoicing = true
+                    break
+                }
+            }
+
+            if hasEmptyVoicing { continue }
+
+            // Try all voicing combinations (no limit to match Android behavior)
+            let voicingCombos = generateVoicingCombinations(voicingOptions: voicingOptions)
+            for voicingCombo in voicingCombos {
+                // Check timeout periodically (every 100 progressions like Android)
+                if progressionList.count % 100 == 0 {
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    if elapsed > timeoutSeconds {
+                        // Timeout reached - return partial results like Android does
+                        isPartial = true
+                        let sorted = progressionList.sorted { $0.complexity < $1.complexity }
+                        return (Array(sorted.prefix(maxResults)), isPartial)
+                    }
+                }
+
+                let complexity = calculateProgressionComplexity(voicingSequence: voicingCombo)
+                let chordObjs = voicingCombo.map { $0.chord }
+                progressionList.append(LyreProgression(complexity: complexity, voicings: voicingCombo, chords: chordObjs))
+            }
+        }
+
+        // Sort and return top results (completed within timeout)
+        let sorted = progressionList.sorted { $0.complexity < $1.complexity }
+        return (Array(sorted.prefix(maxResults)), isPartial)
+    }
+
+    func generateChordSequences(availableChords: [(Int, Int)], length: Int) -> [[(Int, Int)]] {
+        var result: [[(Int, Int)]] = []
+
+        func backtrack(current: [(Int, Int)]) {
+            if current.count == length {
+                result.append(current)
+                return
+            }
+
+            for chord in availableChords {
+                backtrack(current: current + [chord])
+            }
+        }
+
+        backtrack(current: [])
+        return result
+    }
+
+    func generateVoicingCombinations(voicingOptions: [[LyreVoicing]]) -> [[LyreVoicing]] {
+        if voicingOptions.isEmpty { return [] }
+        if voicingOptions.count == 1 { return voicingOptions[0].map { [$0] } }
+
+        var result: [[LyreVoicing]] = []
+
+        func backtrack(index: Int, current: [LyreVoicing]) {
+            if index == voicingOptions.count {
+                result.append(current)
+                return
+            }
+
+            for voicing in voicingOptions[index] {
+                backtrack(index: index + 1, current: current + [voicing])
+            }
+        }
+
+        backtrack(index: 0, current: [])
+        return result
+    }
+
+    func calculateProgressionComplexity(voicingSequence: [LyreVoicing]) -> Double {
+        var complexity = 0.0
+
+        // Individual chord complexities
+        for voicing in voicingSequence {
+            let freqs = voicing.stringIndices.compactMap { index -> Double? in
+                let idx = index - 1
+                guard idx >= 0 && idx < frequencies.count else { return nil }
+                return frequencies[idx]
+            }
+
+            if freqs.count == voicing.stringIndices.count {
+                let freqsFloat = freqs.map { Float($0) }
+                let ratios = chordAnalyzer.frequenciesToRatios(freqs: freqsFloat)
+                let chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(notes: ratios)
+                complexity += chordComplexity
+            }
+
+            complexity += voicing.voicingPenalty()
+        }
+
+        // Voice leading distances
+        for i in 0..<voicingSequence.count-1 {
+            let vlDistance = voiceLeadingDistance(voicing1: voicingSequence[i], voicing2: voicingSequence[i+1])
+            complexity += vlDistance * VOICE_LEADING_WEIGHT
+        }
+
+        // Root movement
+        for i in 0..<voicingSequence.count-1 {
+            let rootComplexity = rootMovementComplexity(chord1: voicingSequence[i].chord, chord2: voicingSequence[i+1].chord)
+            complexity += rootComplexity
+        }
+
+        return complexity
+    }
+
+    func voiceLeadingDistance(voicing1: LyreVoicing, voicing2: LyreVoicing) -> Double {
+        let strings1 = Set(voicing1.stringIndices)
+        let strings2 = Set(voicing2.stringIndices)
+
+        let common = strings1.intersection(strings2)
+        let voicesThatMove = (strings1.subtracting(common).count + strings2.subtracting(common).count)
+
+        let commonToneBonus = Double(common.count) * COMMON_TONE_BONUS
+
+        return Double(voicesThatMove) + commonToneBonus
+    }
+
+    func rootMovementComplexity(chord1: LyreChord, chord2: LyreChord) -> Double {
+        let degreeDistance = (chord2.rootDegree - chord1.rootDegree + 7) % 7
+        return ROOT_MOVEMENT_STRENGTH[degreeDistance] ?? 1.0
+    }
+
+    func formatResultsForDisplay(progressions: [LyreProgression], sortByCadence: Bool) -> [ProgressionDisplay] {
+        var displayList: [ProgressionDisplay] = []
+
+        print("\n=== iOS PROGRESSION ANALYSIS DEBUG ===")
+        print("Input progressions: \(progressions.count)")
+        print("Sort by cadence: \(sortByCadence)")
+
+        // Identify common progressions first
+        let identified = identifyCommonProgressions(progressions: progressions)
+
+        let withNames = identified.filter { $0.commonName != nil }.count
+        print("Progressions with cadence names: \(withNames)")
+
+        // Sort if requested
+        let sorted = sortByCadence ? identified.sorted { a, b in
+            if a.commonName == nil && b.commonName != nil { return false }
+            if a.commonName != nil && b.commonName == nil { return true }
+            if let aName = a.commonName, let bName = b.commonName, aName != bName {
+                return aName < bName
+            }
+            return a.complexity < b.complexity
+        } : identified
+
+        print("After sorting: \(sorted.count)")
+        print("\nFirst 10 progressions (before take/prefix):")
+
+        for (rank, prog) in sorted.enumerated() {
+            if rank >= 100 {
+                break  // Only take first 100 like Android
+            }
+            let chordSymbols = prog.chords.map { $0.toRomanNumeral() }.joined(separator: " - ")
+
+            if rank < 10 {
+                print("  \(rank + 1). \(chordSymbols) | complexity: \(String(format: "%.6f", prog.complexity)) | cadence: \(prog.commonName ?? "none")")
+            }
+
+            let noteSequence = prog.voicings.map { voicingToNoteNames($0) }.joined(separator: "  ")
+
+            // Get frequencies
+            var allFrequencies: [Double] = []
+            var notesPerChord: [Int] = []
+
+            for voicing in prog.voicings {
+                let freqs = voicing.stringIndices.compactMap { index -> Double? in
+                    let idx = index - 1
+                    guard idx >= 0 && idx < frequencies.count else { return nil }
+                    return frequencies[idx]
+                }
+                allFrequencies.append(contentsOf: freqs)
+                notesPerChord.append(freqs.count)
+            }
+
+            displayList.append(ProgressionDisplay(
+                rank: rank + 1,
+                notes: noteSequence,
+                chordSymbols: chordSymbols,
+                commonName: prog.commonName,
+                complexity: prog.complexity,
+                frequencies: allFrequencies,
+                notesPerChord: notesPerChord
+            ))
+        }
+
+        print("\n=== Total results returned: \(displayList.count) ===\n")
+
+        return displayList
+    }
+
+    func identifyCommonProgressions(progressions: [LyreProgression]) -> [LyreProgression] {
+        // Two-chord cadence patterns (based on last two chords)
+        let twoChordPatterns: [Mode: [[Int]: String]] = [
+            .dorios: [  // Phrygian
+                [0, 1]: "Phrygian Cadence (i-♭II)",
+                [5, 0]: "Plagal Resolution (♭VI-i)",
+                [6, 0]: "Subtonic Resolution (♭vii-i)",
+                [1, 0]: "Descending Half-Step (♭II-i)",
+                [3, 0]: "Subdominant Resolution (iv-i)",
+                [2, 0]: "Mediant Resolution (♭III-i)",
+                [4, 0]: "Diminished Resolution (v°-i)",
+                [0, 5]: "Half Cadence (i-♭VI)",
+                [0, 2]: "Rising Mediant (i-♭III)",
+                [5, 6]: "Modal Motion (♭VI-♭vii)"
+            ],
+            .phrygios: [  // Dorian
+                [4, 0]: "Minor Authentic (v-i)",
+                [3, 0]: "Dorian Plagal (IV-i)",
+                [6, 0]: "Dorian Subtonic (♭VII-i)",
+                [0, 4]: "Minor Half Cadence (i-v)",
+                [2, 0]: "Mediant Resolution (♭III-i)",
+                [1, 0]: "Supertonic Resolution (ii-i)",
+                [0, 6]: "Rising Subtonic (i-♭VII)",
+                [0, 3]: "Subdominant Motion (i-IV)",
+                [3, 4]: "Plagal to Dominant (IV-v)"
+            ],
+            .lydios: [  // Ionian/Major
+                [4, 0]: "Authentic Cadence (V-I)",
+                [3, 0]: "Plagal Cadence (IV-I)",
+                [0, 4]: "Half Cadence (I-V)",
+                [4, 5]: "Deceptive Cadence (V-vi)",
+                [1, 0]: "Supertonic Resolution (ii-I)",
+                [5, 0]: "Submediant Resolution (vi-I)",
+                [6, 0]: "Leading Tone Resolution (vii°-I)",
+                [0, 3]: "Tonic to Subdominant (I-IV)",
+                [0, 5]: "Tonic to Submediant (I-vi)"
+            ],
+            .mixolydios: [  // Locrian
+                [5, 0]: "Locrian Resolution (♭VI-i°)",
+                [1, 0]: "Half-Step Descent (♭II-i°)",
+                [6, 0]: "Subtonic Resolution (♭vii-i°)",
+                [3, 0]: "Subdominant Resolution (iv-i°)",
+                [2, 0]: "Mediant Resolution (♭iii-i°)"
+            ],
+            .hypodorios: [  // Aeolian/Minor
+                [4, 0]: "Minor Authentic (v-i)",
+                [3, 0]: "Minor Plagal (iv-i)",
+                [0, 4]: "Minor Half Cadence (i-v)",
+                [6, 0]: "Aeolian Subtonic (♭VII-i)",
+                [5, 0]: "Submediant Resolution (♭VI-i)",
+                [2, 0]: "Relative Major (♭III-i)",
+                [0, 6]: "Rising Subtonic (i-♭VII)",
+                [0, 5]: "Rising Submediant (i-♭VI)",
+                [5, 6]: "Modal Progression (♭VI-♭VII)"
+            ],
+            .hypolydios: [  // Lydian
+                [4, 0]: "Authentic Cadence (V-I)",
+                [1, 0]: "Lydian Characteristic (II-I)",
+                [0, 4]: "Half Cadence (I-V)",
+                [3, 0]: "Plagal Cadence (IV-I)",
+                [0, 1]: "Lydian Rising (I-II)",
+                [4, 5]: "Deceptive Cadence (V-vi)"
+            ],
+            .hypophrygios: [  // Mixolydian
+                [4, 0]: "Minor Dominant (v-I)",
+                [6, 0]: "Mixolydian Cadence (♭VII-I)",
+                [3, 0]: "Plagal Cadence (IV-I)",
+                [0, 6]: "Mixolydian Half Cadence (I-♭VII)",
+                [0, 4]: "Tonic to Dominant (I-v)",
+                [0, 3]: "Tonic to Subdominant (I-IV)",
+                [5, 0]: "Submediant Resolution (vi-I)",
+                [1, 0]: "Supertonic Resolution (ii-I)"
+            ]
+        ]
+
+        // Three-chord full progression patterns
+        let threeChordPatterns: [Mode: [[Int]: String]] = [
+            .dorios: [
+                [0, 5, 6]: "Phrygian Descent (i-♭VI-♭vii)",
+                [6, 5, 0]: "Descending Resolution (♭vii-♭VI-i)"
+            ],
+            .phrygios: [
+                [0, 3, 4]: "Dorian Progression (i-IV-v)",
+                [1, 4, 0]: "Minor Turnaround (ii-v-i)",
+                [0, 6, 3]: "Dorian Color (i-♭VII-IV)"
+            ],
+            .lydios: [
+                [0, 3, 4]: "Basic Progression (I-IV-V)",
+                [0, 4, 0]: "Tonicization (I-V-I)",
+                [1, 4, 0]: "Jazz Turnaround (ii-V-I)",
+                [0, 5, 3]: "Descending Thirds (I-vi-IV)"
+            ],
+            .hypodorios: [
+                [0, 3, 4]: "Minor Progression (i-iv-v)",
+                [0, 5, 6]: "Aeolian Descent (i-♭VI-♭VII)",
+                [0, 6, 3]: "Modal Color (i-♭VII-iv)"
+            ],
+            .hypolydios: [
+                [0, 1, 4]: "Lydian Brightness (I-II-V)",
+                [0, 3, 4]: "Basic Progression (I-IV-V)"
+            ],
+            .hypophrygios: [
+                [0, 6, 3]: "Mixolydian Character (I-♭VII-IV)",
+                [0, 3, 6]: "Modal Ascent (I-IV-♭VII)"
+            ]
+        ]
+
+        // Four-chord full progression patterns
+        let fourChordPatterns: [Mode: [[Int]: String]] = [
+            .dorios: [
+                [0, 5, 6, 0]: "Phrygian Loop (i-♭VI-♭vii-i)",
+                [0, 1, 5, 0]: "Chromatic Circle (i-♭II-♭VI-i)",
+                [6, 5, 0, 1]: "Modal Cycle (♭vii-♭VI-i-♭II)",
+                [0, 5, 1, 0]: "Flat-Side Loop (i-♭VI-♭II-i)"
+            ],
+            .phrygios: [
+                [0, 6, 3, 4]: "Dorian Cycle (i-♭VII-IV-v)",
+                [0, 3, 6, 0]: "Dorian Loop (i-IV-♭VII-i)"
+            ],
+            .lydios: [
+                [0, 4, 5, 3]: "Pop Progression (I-V-vi-IV)",
+                [0, 5, 3, 4]: "50s Progression (I-vi-IV-V)",
+                [5, 3, 0, 4]: "Sensitive Progression (vi-IV-I-V)",
+                [0, 3, 4, 0]: "Circle of Fifths (I-IV-V-I)",
+                [1, 4, 0, 0]: "Extended Turnaround (ii-V-I-I)"
+            ],
+            .mixolydios: [
+                [0, 1, 5, 0]: "Locrian Cycle (i°-♭II-♭VI-i°)"
+            ],
+            .hypodorios: [
+                [0, 5, 6, 3]: "Aeolian Progression (i-♭VI-♭VII-iv)",
+                [0, 6, 3, 4]: "Minor Modal Cycle (i-♭VII-iv-v)",
+                [0, 3, 6, 0]: "Minor Loop (i-iv-♭VII-i)"
+            ],
+            .hypolydios: [
+                [0, 1, 4, 0]: "Lydian Resolution (I-II-V-I)"
+            ],
+            .hypophrygios: [
+                [0, 6, 3, 6]: "Mixolydian Vamp (I-♭VII-IV-♭VII)",
+                [0, 3, 6, 0]: "Mixolydian Loop (I-IV-♭VII-I)"
+            ]
+        ]
+
+        return progressions.map { prog in
+            let chordDegrees = prog.chords.map { $0.rootDegree }
+            let allTriads = prog.chords.allSatisfy { $0.size == TRIAD_SIZE }
+
+            if allTriads && chordDegrees.count >= 2 {
+                // Check full progression patterns first (for famous progressions)
+                var name: String? = nil
+
+                switch chordDegrees.count {
+                case 3:
+                    name = threeChordPatterns[mode]?[chordDegrees]
+                case 4:
+                    name = fourChordPatterns[mode]?[chordDegrees]
+                default:
+                    break
+                }
+
+                // Fall back to cadence (last two chords)
+                if name == nil {
+                    let lastTwo = Array(chordDegrees.suffix(2))
+                    name = twoChordPatterns[mode]?[lastTwo]
+                }
+
+                if let foundName = name {
+                    prog.commonName = foundName
+                    print("CadenceID: Found \(foundName) for degrees \(chordDegrees) in mode \(mode.rawValue)")
+                }
+            }
+
+            return prog
+        }
+    }
+
+    func voicingToNoteNames(_ voicing: LyreVoicing) -> String {
+        return voicing.semitones.map { semitoneToNoteName(semitone: $0) }.joined(separator: "-")
+    }
+
+    func semitoneToNoteName(semitone: Int) -> String {
+        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let noteOrder = ["C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5, "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11]
+
+        guard let firstNoteIndex = noteOrder[firstNote] else { return "?" }
+
+        let absoluteSemitone = firstNoteIndex + semitone
+        let octave = 4 + (absoluteSemitone / 12)
+        let noteIndex = absoluteSemitone % 12
+        return "\(noteNames[noteIndex])\(octave)"
+    }
+}
+
+// Data structures for chord progressions
+struct ProgressionDisplay: Identifiable {
+    let id = UUID()
+    let rank: Int
+    let notes: String
+    let chordSymbols: String
+    let commonName: String?
+    let complexity: Double
+    let frequencies: [Double]
+    let notesPerChord: [Int]
+}
+
+// MARK: - Chord Progression View
+
+struct ChordProgressionView: View {
+    @ObservedObject var settings: SettingsManager
+    @Environment(\.presentationMode) var presentationMode
+    @State private var progressions: [ProgressionDisplay] = []
+    @State private var isAnalyzing = false
+    @State private var errorMessage: String? = nil
+    @State private var isPartialResults = false
+
+    // Progression parameters
+    @State private var selectedChordSizes: Set<Int> = [3]
+    @State private var selectedProgressionLength = 4
+    @State private var sortByCadence = false
+
+    // Audio playback state
+    @State private var audioManager: ChordProgressionAudioManager?
+    @State private var currentlyPlaying: Int? = nil
+
+    // Task management for cancellation
+    @State private var analysisTask: Task<Void, Never>? = nil
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        // Current Settings Card
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Current Settings")
+                                .font(.headline)
+                                .padding(.bottom, 4)
+
+                            Text("Scale Type: \(settings.scaleTypeCategory.rawValue)")
+                            Text("Mode: \(settings.selectedMode.rawValue)")
+                            Text("First Note: \(settings.firstNote)")
+                            Text("Number of Strings: \(settings.numberOfStrings)")
+                            Text("Temperament: \(settings.temperament.rawValue)")
+                            Text("Octave Offset: \(settings.octaveOffset)")
+                        }
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+
+                        // Error message if invalid settings
+                        if let error = errorMessage {
+                            Text(error)
+                                .foregroundColor(.white)
+                                .padding()
+                                .background(Color.red)
+                                .cornerRadius(8)
+                        }
+
+                        // Analysis options
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Analysis Options")
+                                .font(.headline)
+
+                            // Chord size selection
+                            Text("Notes per chord (select multiple):")
+                                .font(.subheadline)
+                            HStack(spacing: 8) {
+                                ForEach([2, 3, 4], id: \.self) { size in
+                                    Button(action: {
+                                        toggleChordSize(size)
+                                    }) {
+                                        Text("\(size) notes")
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(selectedChordSizes.contains(size) ? Color.blue : Color.gray.opacity(0.3))
+                                            .foregroundColor(.white)
+                                            .cornerRadius(6)
+                                    }
+                                }
+                            }
+
+                            // Progression length selection
+                            Text("Chords in sequence:")
+                                .font(.subheadline)
+                                .padding(.top, 8)
+                            HStack(spacing: 8) {
+                                ForEach([2, 3, 4, 5], id: \.self) { length in
+                                    Button(action: {
+                                        selectedProgressionLength = length
+                                    }) {
+                                        Text("\(length)")
+                                            .padding(.horizontal, 16)
+                                            .padding(.vertical, 6)
+                                            .background(selectedProgressionLength == length ? Color.blue : Color.gray.opacity(0.3))
+                                            .foregroundColor(.white)
+                                            .cornerRadius(6)
+                                    }
+                                }
+                            }
+
+                            // Sort by cadence toggle
+                            Toggle("Prioritize common modern Western cadences", isOn: $sortByCadence)
+                                .padding(.top, 8)
+                        }
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+
+                        // Analyze button
+                        Button(action: analyzeProgressions) {
+                            HStack {
+                                if isAnalyzing {
+                                    ProgressView()
+                                        .progressViewStyle(CircularProgressViewStyle())
+                                        .padding(.trailing, 8)
+                                }
+                                Text(isAnalyzing ? "Analyzing..." : "Suggest Chord Progressions")
+                                    .font(.headline)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(errorMessage != nil ? Color.gray : Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                        }
+                        .disabled(isAnalyzing || errorMessage != nil)
+
+                        // Partial results warning
+                        if isPartialResults {
+                            Text("⚠️ Analysis timed out after 30 seconds - showing partial results")
+                                .font(.caption)
+                                .foregroundColor(.orange)
+                                .padding()
+                                .background(Color.orange.opacity(0.1))
+                                .cornerRadius(8)
+                        }
+
+                        // Results
+                        if !progressions.isEmpty {
+                            Text("Suggested Progressions (\(progressions.count))")
+                                .font(.headline)
+                                .padding(.top, 8)
+
+                            ForEach(progressions) { progression in
+                                ProgressionRow(
+                                    progression: progression,
+                                    isPlaying: currentlyPlaying == (progression.rank - 1),
+                                    showCadenceLabels: sortByCadence,
+                                    onPlay: {
+                                        playProgression(progression)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding()
+                }
+            }
+            .navigationTitle("Chord Progression Tool")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") {
+                        // Stop any playing audio
+                        audioManager?.stop()
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            checkSettings()
+            audioManager = ChordProgressionAudioManager()
+        }
+        .onDisappear {
+            // Cancel any running analysis
+            analysisTask?.cancel()
+            // Stop audio playback
+            audioManager?.stop()
+        }
+    }
+
+    private func toggleChordSize(_ size: Int) {
+        if selectedChordSizes.contains(size) {
+            // Don't allow deselecting if it's the last one
+            if selectedChordSizes.count > 1 {
+                selectedChordSizes.remove(size)
+            }
+        } else {
+            selectedChordSizes.insert(size)
+        }
+    }
+
+    private func checkSettings() {
+        if settings.scaleTypeCategory != .modes {
+            errorMessage = "Chord progressions only available for Modes scale type"
+        } else if settings.temperament == .equal {
+            errorMessage = "Non-rational tunings not supported, try Just Intonation"
+        } else if settings.numberOfStrings < 4 {
+            errorMessage = "Minimum 4 strings required for chord progression analysis"
+        } else if settings.numberOfStrings > 9 {
+            errorMessage = "Maximum 9 strings supported for chord progression analysis"
+        } else {
+            errorMessage = nil
+        }
+    }
+
+    private func analyzeProgressions() {
+        guard errorMessage == nil else { return }
+
+        // Cancel any existing analysis
+        analysisTask?.cancel()
+
+        isAnalyzing = true
+        isPartialResults = false
+        progressions = []
+
+        // Create analysis task (timeout handled inside generateProgressions like Android)
+        analysisTask = Task {
+            do {
+                let result = try await self.performAnalysis()
+
+                await MainActor.run {
+                    self.progressions = result
+                    self.isAnalyzing = false
+                    // isPartialResults is set inside performAnalysis if timeout occurred
+                }
+            } catch is CancellationError {
+                // Manual cancellation
+                await MainActor.run {
+                    self.isAnalyzing = false
+                }
+            } catch {
+                // Other errors
+                await MainActor.run {
+                    self.errorMessage = "Analysis failed: \(error.localizedDescription)"
+                    self.isAnalyzing = false
+                }
+            }
+        }
+    }
+
+    private func performAnalysis() async throws -> [ProgressionDisplay] {
+        return try await Task.detached(priority: .userInitiated) {
+            // Check for cancellation before heavy work
+            try Task.checkCancellation()
+
+            let scaleData = await Task { @MainActor in
+                self.settings.calculateScale()
+            }.value
+
+            try Task.checkCancellation()
+
+            // Create chord analyzer
+            let chordAnalyzer = LyreChordAnalyzer(scaleData: scaleData)
+
+            try Task.checkCancellation()
+
+            // Get current settings
+            let mode = await MainActor.run { self.settings.selectedMode }
+            let firstNote = await MainActor.run { self.settings.firstNote }
+            let numStrings = await MainActor.run { self.settings.numberOfStrings }
+            let temperament = await MainActor.run { self.settings.temperament }
+            let octaveOffset = await MainActor.run { self.settings.octaveOffset }
+            let progressionLength = await MainActor.run { self.selectedProgressionLength }
+            let chordSizes = await MainActor.run { self.selectedChordSizes }
+            let sortByCadence = await MainActor.run { self.sortByCadence }
+
+            try Task.checkCancellation()
+
+            // Create progression analyzer
+            let analyzer = LyreProgressionAnalyzer(
+                mode: mode,
+                firstNote: firstNote,
+                numStrings: numStrings,
+                temperament: temperament,
+                octaveOffset: octaveOffset,
+                scaleData: scaleData,
+                chordAnalyzer: chordAnalyzer
+            )
+
+            try Task.checkCancellation()
+
+            // Generate progressions with timeout like Android (30 seconds)
+            let startTime = Date()
+            let maxResults = min(100, numStrings <= 5 ? 200 : 100)
+            let (results, isPartial) = analyzer.generateProgressions(
+                length: progressionLength,
+                chordSizes: chordSizes,
+                maxResults: maxResults,
+                timeoutSeconds: 30.0,
+                startTime: startTime
+            )
+
+            try Task.checkCancellation()
+
+            // Update partial results flag on main actor
+            if isPartial {
+                await MainActor.run {
+                    self.isPartialResults = true
+                }
+            }
+
+            // Format for display
+            let displayResults = analyzer.formatResultsForDisplay(
+                progressions: results,
+                sortByCadence: sortByCadence
+            )
+
+            return displayResults
+        }.value
+    }
+
+    enum AnalysisError: Error {
+        case invalidScaleData
+        case analyzerCreationFailed
+        case timeout
+    }
+
+    private func playProgression(_ progression: ProgressionDisplay) {
+        guard let audio = audioManager else { return }
+
+        currentlyPlaying = progression.rank - 1
+
+        Task {
+            do {
+                try await audio.playProgression(
+                    frequencies: progression.frequencies,
+                    notesPerChord: progression.notesPerChord
+                )
+                currentlyPlaying = nil
+            } catch {
+                print("Error playing progression: \(error)")
+                currentlyPlaying = nil
+            }
+        }
+    }
+}
+
+// View that wraps chords properly - breaks only between chords, not within them
+struct ChordSymbolsView: View {
+    let text: String
+    let isLarge: Bool
+
+    var body: some View {
+        // Chord symbols use " - " separator, notes use "  " separator
+        let separator = isLarge ? " - " : "  "
+        let chords = text.components(separatedBy: separator).filter { !$0.isEmpty }
+
+        FlowLayout(spacing: isLarge ? 4 : 8) {
+            ForEach(Array(chords.enumerated()), id: \.offset) { index, chord in
+                HStack(spacing: 4) {
+                    Text(chord)
+                        .font(.system(isLarge ? .body : .caption, design: .monospaced))
+                        .foregroundColor(isLarge ? .blue : .gray)
+                    // Add dash separator for roman numerals (but not after last one)
+                    if isLarge && index < chords.count - 1 {
+                        Text("-")
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundColor(.blue)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// FlowLayout that wraps items horizontally
+struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = FlowResult(
+            in: proposal.replacingUnspecifiedDimensions().width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = FlowResult(
+            in: bounds.width,
+            subviews: subviews,
+            spacing: spacing
+        )
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + result.frames[index].minX,
+                                     y: bounds.minY + result.frames[index].minY),
+                         proposal: ProposedViewSize(result.frames[index].size))
+        }
+    }
+
+    struct FlowResult {
+        var frames: [CGRect] = []
+        var size: CGSize = .zero
+
+        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
+            var x: CGFloat = 0
+            var y: CGFloat = 0
+            var lineHeight: CGFloat = 0
+
+            for subview in subviews {
+                let size = subview.sizeThatFits(.unspecified)
+
+                if x + size.width > maxWidth && x > 0 {
+                    // Start new line
+                    x = 0
+                    y += lineHeight + spacing
+                    lineHeight = 0
+                }
+
+                frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
+                lineHeight = max(lineHeight, size.height)
+                x += size.width + spacing
+            }
+
+            self.size = CGSize(width: maxWidth, height: y + lineHeight)
+        }
+    }
+}
+
+struct ProgressionRow: View {
+    let progression: ProgressionDisplay
+    let isPlaying: Bool
+    let showCadenceLabels: Bool
+    let onPlay: () -> Void
+
+    @State private var showCopiedAlert = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            // Play button
+            Button(action: onPlay) {
+                Image(systemName: isPlaying ? "stop.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.blue)
+            }
+            .frame(width: 40)
+
+            // Rank
+            Text("\(progression.rank)")
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 30, alignment: .leading)
+
+            // Chord symbols and notes
+            VStack(alignment: .leading, spacing: 2) {
+                if showCadenceLabels, let name = progression.commonName {
+                    Text(name)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                ChordSymbolsView(text: progression.chordSymbols, isLarge: true)
+                ChordSymbolsView(text: progression.notes, isLarge: false)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Complexity
+            Text(String(format: "%.4f", progression.complexity))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.gray)
+                .frame(width: 70, alignment: .trailing)
+        }
+        .padding(8)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(6)
+        .contentShape(Rectangle())
+        .onLongPressGesture {
+            // Copy to clipboard
+            let textToCopy = "\(progression.chordSymbols)\n\(progression.notes)"
+            UIPasteboard.general.string = textToCopy
+            showCopiedAlert = true
+
+            // Haptic feedback
+            let generator = UINotificationFeedbackGenerator()
+            generator.notificationOccurred(.success)
+        }
+        .alert("Copied to Clipboard", isPresented: $showCopiedAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Progression copied to clipboard")
+        }
+    }
+}
+
+// Audio manager for chord progression playback
+class ChordProgressionAudioManager {
+    private let audioEngine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    private var isPlaying = false
+    private let audioFormat: AVAudioFormat
+
+    init() {
+        // Create a consistent audio format - stereo at 44100 Hz
+        audioFormat = AVAudioFormat(standardFormatWithSampleRate: 44100.0, channels: 2)!
+
+        audioEngine.attach(playerNode)
+        audioEngine.connect(playerNode, to: audioEngine.mainMixerNode, format: audioFormat)
+
+        do {
+            try audioEngine.start()
+        } catch {
+            print("Failed to start audio engine: \(error)")
+        }
+    }
+
+    func playProgression(frequencies: [Double], notesPerChord: [Int]) async throws {
+        // Validate input
+        guard !frequencies.isEmpty, !notesPerChord.isEmpty else {
+            throw AudioError.invalidInput
+        }
+
+        // Check that we have enough frequencies for all chords
+        let totalNotes = notesPerChord.reduce(0, +)
+        guard totalNotes == frequencies.count else {
+            throw AudioError.mismatchedData
+        }
+
+        // Validate frequency values (must be positive and reasonable)
+        guard frequencies.allSatisfy({ $0 > 0 && $0 < 20000 }) else {
+            throw AudioError.invalidFrequency
+        }
+
+        stop()
+
+        let sampleRate = 44100.0
+        let noteDuration = 0.6 // seconds per chord
+        let pauseDuration = 0.05 // seconds between chords
+
+        // Generate audio for each chord
+        var freqIndex = 0
+        for (chordIdx, numNotes) in notesPerChord.enumerated() {
+            // Safety check for array bounds
+            guard freqIndex + numNotes <= frequencies.count else {
+                print("Warning: Insufficient frequencies for chord \(chordIdx), stopping playback")
+                break
+            }
+
+            let chordFreqs = Array(frequencies[freqIndex..<(freqIndex + numNotes)])
+            freqIndex += numNotes
+
+            // Generate chord audio
+            let chordBuffer = generateChord(frequencies: chordFreqs, duration: noteDuration, sampleRate: sampleRate)
+
+            // Play chord
+            await MainActor.run {
+                playerNode.scheduleBuffer(chordBuffer, at: nil, options: [])
+                if !isPlaying {
+                    playerNode.play()
+                    isPlaying = true
+                }
+            }
+
+            // Wait for chord to finish (check for cancellation)
+            try await Task.sleep(nanoseconds: UInt64((noteDuration + pauseDuration) * 1_000_000_000))
+        }
+    }
+
+    enum AudioError: Error {
+        case invalidInput
+        case mismatchedData
+        case invalidFrequency
+        case bufferCreationFailed
+    }
+
+    func stop() {
+        playerNode.stop()
+        isPlaying = false
+    }
+
+    private func generateChord(frequencies: [Double], duration: Double, sampleRate: Double) -> AVAudioPCMBuffer {
+        let numSamples = Int(duration * sampleRate)
+        let buffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: AVAudioFrameCount(numSamples))!
+        buffer.frameLength = AVAudioFrameCount(numSamples)
+
+        guard let channelData = buffer.floatChannelData else { return buffer }
+
+        let fadeInSamples = Int(0.01 * sampleRate)
+        let fadeOutSamples = Int(0.05 * sampleRate)
+        let amplitude = Float(0.7) / Float(frequencies.count)
+
+        for i in 0..<numSamples {
+            var mixedSample: Float = 0.0
+
+            // Mix all frequencies
+            for frequency in frequencies {
+                let angle = 2.0 * Double.pi * Double(i) * frequency / sampleRate
+                mixedSample += Float(sin(angle)) * amplitude
+            }
+
+            // Apply fade in
+            if i < fadeInSamples {
+                mixedSample *= Float(i) / Float(fadeInSamples)
+            }
+            // Apply fade out
+            else if i >= numSamples - fadeOutSamples {
+                mixedSample *= Float(numSamples - i) / Float(fadeOutSamples)
+            }
+
+            // Write to both channels (stereo)
+            channelData[0][i] = mixedSample  // Left channel
+            channelData[1][i] = mixedSample  // Right channel
+        }
+
+        return buffer
+    }
+}
+
 // MARK: - Chord Analysis View
 
 struct ChordAnalysisView: View {
@@ -2593,7 +4012,7 @@ struct ChordAnalysisView: View {
         .onAppear {
             checkTemperament()
         }
-        .onChange(of: settings.numberOfStrings) { _ in
+        .onChange(of: settings.numberOfStrings) {
             checkTemperament()
         }
     }
@@ -2647,6 +4066,7 @@ struct SettingsView: View {
     @State private var profileToDelete = ""
     @State private var showingTranspositionTool = false
     @State private var showingChordAnalysis = false
+    @State private var showingChordProgression = false
 
     private let notes = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     private let fftResolutionOptions = ["2048 (Fast)", "4096 (Balanced)", "8192 (High Res)", "16384 (Very High)", "32768 (Ultra)", "65536 (Maximum)"]
@@ -2689,6 +4109,26 @@ struct SettingsView: View {
                     .foregroundColor(.blue)
                     .padding()
                     .background(Color.gray.opacity(0.1))
+                }
+
+                // Chord Progression Tool Button (only for Modes)
+                if settings.scaleTypeCategory == .modes {
+                    Button(action: {
+                        showingChordProgression = true
+                    }) {
+                        HStack {
+                            Image(systemName: "music.quarternote.3")
+                                .font(.system(size: 20))
+                            Text("Suggest Chord Progressions")
+                                .font(.headline)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14))
+                        }
+                        .foregroundColor(.blue)
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                    }
                 }
 
                 Form {
@@ -2912,6 +4352,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showingChordAnalysis) {
             ChordAnalysisView(settings: settings)
+        }
+        .sheet(isPresented: $showingChordProgression) {
+            ChordProgressionView(settings: settings)
         }
     }
 

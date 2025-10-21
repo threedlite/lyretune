@@ -1637,6 +1637,10 @@ class LyreProgressionAnalyzer(
     fun formatResultsForDisplay(identified: Map<Int, List<Progression>>, selectedLength: Int? = null, sortByCadence: Boolean = false): List<ProgressionDisplay> {
         val displayList = mutableListOf<ProgressionDisplay>()
 
+        android.util.Log.d("ProgDebug", "=== ANDROID PROGRESSION ANALYSIS DEBUG ===")
+        android.util.Log.d("ProgDebug", "Selected length: $selectedLength")
+        android.util.Log.d("ProgDebug", "Sort by cadence: $sortByCadence")
+
         // Get progressions for selected length or all lengths
         val lengthsToShow = if (selectedLength != null) {
             listOf(selectedLength)
@@ -1646,6 +1650,11 @@ class LyreProgressionAnalyzer(
 
         for (length in lengthsToShow) {
             val progressionsList = identified[length] ?: emptyList()
+
+            android.util.Log.d("ProgDebug", "Length $length: Input progressions: ${progressionsList.size}")
+
+            val withNames = progressionsList.count { it.commonName != null }
+            android.util.Log.d("ProgDebug", "Progressions with cadence names: $withNames")
 
             // Sort by cadence if requested
             val progressions = if (sortByCadence) {
@@ -1661,7 +1670,17 @@ class LyreProgressionAnalyzer(
                 progressionsList
             }
 
-            for ((rank, prog) in progressions.take(100).withIndex()) {
+            android.util.Log.d("ProgDebug", "After sorting: ${progressions.size}")
+
+            val top100 = progressions.take(100)
+            android.util.Log.d("ProgDebug", "After take(100): ${top100.size}")
+            android.util.Log.d("ProgDebug", "\nFirst 10 progressions:")
+
+            for ((rank, prog) in top100.withIndex()) {
+                if (rank < 10) {
+                    val chordSymbols = prog.chords.joinToString(" - ")
+                    android.util.Log.d("ProgDebug", "  ${rank + 1}. $chordSymbols | complexity: ${"%.6f".format(prog.complexity)} | cadence: ${prog.commonName ?: "none"}")
+                }
                 val noteSequence = prog.voicings.joinToString("  ") { voicingToNoteNames(it) }
                 val chordSymbols = prog.chords.joinToString(" - ")
 
@@ -1708,6 +1727,8 @@ class LyreProgressionAnalyzer(
                 )
             }
         }
+
+        android.util.Log.d("ProgDebug", "\n=== Total results returned: ${displayList.size} ===\n")
 
         return displayList
     }
