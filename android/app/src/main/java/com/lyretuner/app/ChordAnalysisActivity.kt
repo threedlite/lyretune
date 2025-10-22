@@ -416,11 +416,12 @@ class LyreChordAnalyzer(
         return result
     }
 
-    fun frequenciesToRatios(freqs: List<Float>): List<Int> {
+    fun frequenciesToRatios(freqs: List<Float>, referenceFrequency: Float? = null): List<Int> {
         if (freqs.isEmpty()) return emptyList()
 
-        val minFreq = freqs.minOrNull() ?: return emptyList()
-        val ratios = freqs.map { it / minFreq }
+        // Use provided reference frequency, or default to minimum
+        val refFreq = referenceFrequency ?: (freqs.minOrNull() ?: return emptyList())
+        val ratios = freqs.map { it / refFreq }
 
         // Convert to integers by finding a common denominator
         val precision = 10000

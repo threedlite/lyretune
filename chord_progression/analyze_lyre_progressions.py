@@ -362,6 +362,11 @@ class LyreProgressionAnalyzer:
             first_octave: Starting octave for the root note (default: 4)
             complexity_params: Parameters for complexity formula
 
+        Note:
+            For chord progression analysis, individual chord complexity uses the
+            middle note of each chord as reference (or lower-middle if even number).
+            Multi-chord metrics use the middle string of the lyre as tonic reference.
+
         Raises:
             ValueError: If mode_name is invalid or num_strings < 3
         """
@@ -386,6 +391,10 @@ class LyreProgressionAnalyzer:
         self.mode_name = mode_name
         self.num_strings = num_strings
         self.params = complexity_params or DEFAULT_PARAMS
+
+        # Calculate middle string index (1-indexed) for tonic reference in multi-chord metrics
+        # For odd number: middle = (n+1)/2, for even: lower-middle = n/2
+        self.tonic_string_index = (num_strings + 1) // 2
 
         # Get mode pattern
         self.scale_semitones = LyreChordAnalyzer.MODES[mode_name]
@@ -425,6 +434,26 @@ class LyreProgressionAnalyzer:
         # Store first note info for note name conversion
         self.first_note = first_note
         self.first_octave = first_octave
+
+    @staticmethod
+    def _get_middle_index(sequence):
+        """
+        Get the middle index of a sequence (0-indexed).
+        For even-length sequences, returns the lower-middle index.
+
+        Args:
+            sequence: Any sequence with length
+
+        Returns:
+            Middle index (0-indexed)
+
+        Examples:
+            [a, b, c] -> 1 (middle)
+            [a, b, c, d] -> 1 (lower-middle)
+            [a, b, c, d, e] -> 2 (middle)
+        """
+        n = len(sequence)
+        return (n - 1) // 2
 
     def _build_interval_pattern(self) -> str:
         """Convert semitone list to H/W pattern.
@@ -689,8 +718,13 @@ class LyreProgressionAnalyzer:
 
             freqs = [self.just_frequencies[idx - 1] for idx in voicing.string_indices]
 
+            # For chord progression analysis, use the middle note of the chord as reference
+            # (or lower-middle if even number of notes)
+            middle_idx = self._get_middle_index(freqs)
+            reference_freq = freqs[middle_idx]
+
             # Convert frequencies to integer ratios using the parent class method
-            ratios = self.chord_analyzer.frequencies_to_ratios(freqs)
+            ratios = self.chord_analyzer.frequencies_to_ratios(freqs, reference_frequency=reference_freq)
 
             chord_complexity = complexity_with_five_adjustments(ratios, **self.params)
             complexity += chord_complexity

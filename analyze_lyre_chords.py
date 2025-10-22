@@ -168,12 +168,14 @@ class LyreChordAnalyzer:
 
         return f"Note{note_semitone}{actual_octave}"
 
-    def frequencies_to_ratios(self, freqs):
+    def frequencies_to_ratios(self, freqs, reference_frequency=None):
         """
         Convert a list of frequencies to integer ratios.
 
         Args:
             freqs: List of frequencies
+            reference_frequency: Optional reference frequency to use instead of min(freqs).
+                               If None, uses the lowest frequency in freqs.
 
         Returns:
             Tuple of integers representing the ratio
@@ -181,9 +183,10 @@ class LyreChordAnalyzer:
         if not freqs:
             return ()
 
-        # Normalize to lowest frequency
-        min_freq = min(freqs)
-        ratios = [f / min_freq for f in freqs]
+        # Normalize to reference frequency (default: lowest frequency in chord)
+        if reference_frequency is None:
+            reference_frequency = min(freqs)
+        ratios = [f / reference_frequency for f in freqs]
 
         # Convert to integers by finding a common denominator
         # We'll use a precision-based approach

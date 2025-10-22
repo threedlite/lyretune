@@ -44,6 +44,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.*
 
+// Chord reference frequency mode for complexity calculation
+enum class ChordReferenceMode {
+    BASS,        // Use bass note (lowest) - default/traditional
+    MIDDLE,      // Use middle note of chord
+    MESE         // Use middle string of lyre (mese/tonic)
+}
+
 // Data class for non-Western cadence analysis
 data class CadenceAnalysis(
     val motion: String,           // Strong Descent, Weak Descent, Ascending Close, Static
@@ -98,6 +105,10 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
     var selectedChordSizes by remember { mutableStateOf(setOf(3)) }
     var selectedProgressionLength by remember { mutableStateOf(4) }
     var sortByCadence by remember { mutableStateOf(false) }
+
+    // Complexity calculation options
+    var useMultiChordMese by remember { mutableStateOf(false) }  // Multi-chord metrics: use mese as tonic
+    var chordReferenceMode by remember { mutableStateOf(ChordReferenceMode.BASS) }  // Single chord reference
 
     // Audio playback state
     var audioTrack by remember { mutableStateOf<AudioTrack?>(null) }
@@ -307,12 +318,64 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Prioritize common modern Western cadences (Just):",
-                            style = MaterialTheme.typography.bodyMedium
+                            text = "Prioritize Western cadences (Just):",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
                         )
                         Switch(
                             checked = sortByCadence,
                             onCheckedChange = { sortByCadence = it }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Multi-chord metrics: use mese as tonic
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Multi-chord metrics: use mese (middle string) as tonic:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = useMultiChordMese,
+                            onCheckedChange = { useMultiChordMese = it }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Chord reference frequency selection
+                    Text(
+                        text = "Single chord reference frequency:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = chordReferenceMode == ChordReferenceMode.BASS,
+                            onClick = { chordReferenceMode = ChordReferenceMode.BASS },
+                            label = { Text("Bass") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = chordReferenceMode == ChordReferenceMode.MIDDLE,
+                            onClick = { chordReferenceMode = ChordReferenceMode.MIDDLE },
+                            label = { Text("Middle") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        FilterChip(
+                            selected = chordReferenceMode == ChordReferenceMode.MESE,
+                            onClick = { chordReferenceMode = ChordReferenceMode.MESE },
+                            label = { Text("Mese") },
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
@@ -333,6 +396,8 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                                         mode, firstNote, numStrings, temperament, octaveOffset,
                                         selectedChordSizes, selectedProgressionLength,
                                         sortByCadence = sortByCadence,
+                                        useMultiChordMese = useMultiChordMese,
+                                        chordReferenceMode = chordReferenceMode,
                                         timeoutMillis = 30000L
                                     )
                                 }
@@ -596,10 +661,13 @@ suspend fun analyzeChordProgressionsWithTimeout(
     chordSizes: Set<Int>,
     progressionLength: Int,
     sortByCadence: Boolean,
+    useMultiChordMese: Boolean,
+    chordReferenceMode: ChordReferenceMode,
     timeoutMillis: Long
 ): AnalysisResult = withContext(Dispatchers.Default) {
     val analyzer = LyreProgressionAnalyzer(
-        mode, firstNote, numStrings, temperament, octaveOffset
+        mode, firstNote, numStrings, temperament, octaveOffset,
+        useMultiChordMese, chordReferenceMode, sortByCadence
     )
 
     val startTime = System.currentTimeMillis()
@@ -1033,7 +1101,10 @@ class LyreProgressionAnalyzer(
     val firstNote: String,
     val numStrings: Int,
     temperament: Temperament,
-    octaveOffset: Int
+    octaveOffset: Int,
+    private val useMultiChordMese: Boolean = false,
+    private val chordReferenceMode: ChordReferenceMode = ChordReferenceMode.BASS,
+    private val sortByCadence: Boolean = false
 ) {
     private val scaleSemitones: List<Int>
     private val frequencies: List<Float>
@@ -1042,6 +1113,10 @@ class LyreProgressionAnalyzer(
     private val chords: List<Chord>
     private val voicings: Map<Pair<Int, Int>, List<LyreVoicing>>
     private val chordAnalyzer: LyreChordAnalyzer
+
+    // Middle string index (1-indexed) for mese/tonic reference
+    // For odd number: middle = (n+1)/2, for even: lower-middle = n/2
+    private val meseStringIndex: Int = (numStrings + 1) / 2
 
     // Same parameters as chord analyzer
     private val params = mapOf(
@@ -1172,6 +1247,54 @@ class LyreProgressionAnalyzer(
         return result
     }
 
+    /**
+     * Get the middle index of a list (0-indexed).
+     * For even-length lists, returns the lower-middle index.
+     *
+     * Examples:
+     *   [a, b, c] -> 1 (middle)
+     *   [a, b, c, d] -> 1 (lower-middle)
+     */
+    private fun <T> getMiddleIndex(list: List<T>): Int {
+        return (list.size - 1) / 2
+    }
+
+    /**
+     * Get the reference semitone for a voicing based on chordReferenceMode.
+     * Used for motion detection in cadence analysis.
+     *
+     * When sortByCadence is true (prioritizing Western cadences), always uses bass note.
+     * Otherwise, respects the chordReferenceMode setting.
+     */
+    private fun getReferenceNote(voicing: LyreVoicing): Int {
+        // When prioritizing Western cadences, always use bass note (traditional)
+        if (sortByCadence) {
+            return voicing.semitones.firstOrNull() ?: 0
+        }
+
+        // Otherwise respect the user's reference mode selection
+        return when (chordReferenceMode) {
+            ChordReferenceMode.BASS -> {
+                // Use bass note (lowest semitone)
+                voicing.semitones.firstOrNull() ?: 0
+            }
+            ChordReferenceMode.MIDDLE -> {
+                // Use middle note of the chord
+                val middleIdx = getMiddleIndex(voicing.semitones)
+                voicing.semitones.getOrNull(middleIdx) ?: voicing.semitones.firstOrNull() ?: 0
+            }
+            ChordReferenceMode.MESE -> {
+                // Use mese (middle string of lyre)
+                val meseIdx = meseStringIndex - 1  // Convert to 0-indexed
+                if (meseIdx >= 0 && meseIdx < scaleSemitones.size) {
+                    scaleSemitones[meseIdx]
+                } else {
+                    voicing.semitones.firstOrNull() ?: 0
+                }
+            }
+        }
+    }
+
     private fun voiceLeadingDistance(voicing1: LyreVoicing, voicing2: LyreVoicing): Double {
         val strings1 = voicing1.stringIndices.toSet()
         val strings2 = voicing2.stringIndices.toSet()
@@ -1205,8 +1328,27 @@ class LyreProgressionAnalyzer(
             return 10.0
         }
 
-        // Convert to ratios
-        val ratios = chordAnalyzer.frequenciesToRatios(freqs)
+        // Determine reference frequency based on chordReferenceMode
+        val referenceFrequency = when (chordReferenceMode) {
+            ChordReferenceMode.BASS -> null  // Use default (minimum)
+            ChordReferenceMode.MIDDLE -> {
+                // Use middle note of the chord (or lower-middle if even)
+                val middleIdx = getMiddleIndex(freqs)
+                freqs[middleIdx]
+            }
+            ChordReferenceMode.MESE -> {
+                // Use middle string of lyre (mese)
+                val meseIdx = meseStringIndex - 1  // Convert to 0-indexed
+                if (meseIdx >= 0 && meseIdx < frequencies.size) {
+                    frequencies[meseIdx]
+                } else {
+                    null  // Fall back to default if invalid
+                }
+            }
+        }
+
+        // Convert to ratios using the selected reference
+        val ratios = chordAnalyzer.frequenciesToRatios(freqs, referenceFrequency)
 
         // Calculate chord complexity
         val chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(ratios)
@@ -1455,25 +1597,26 @@ class LyreProgressionAnalyzer(
         // 1. ROOT MOTION PATTERN
         val rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
 
-        // Compare actual bass notes (first notes) of voicings, not theoretical root pitch classes
-        val penultimateBass = penultimateVoicing.semitones.firstOrNull() ?: penultimateChord.rootSemitone
-        val finalBass = finalVoicing.semitones.firstOrNull() ?: finalChord.rootSemitone
+        // Get reference notes based on chordReferenceMode setting
+        // (bass, middle, or mese depending on user selection)
+        val penultimateRef = getReferenceNote(penultimateVoicing)
+        val finalRef = getReferenceNote(finalVoicing)
 
         val motion = when {
-            // Check if bass notes are the same first (handles inversions with same bass)
-            penultimateBass == finalBass -> "Static"
+            // Check if reference notes are the same first
+            penultimateRef == finalRef -> "Static"
             rootDegreeDistance == 0 -> "Static"
             rootDegreeDistance in listOf(3, 4) -> {
                 // Distances 3-4 are fourths/fifths (strong intervals)
-                if (finalBass < penultimateBass) "Strong Descent" else "Ascending Close"
+                if (finalRef < penultimateRef) "Strong Descent" else "Ascending Close"
             }
             rootDegreeDistance in listOf(1, 2) -> {
                 // Distances 1-2 are seconds/thirds (weak intervals)
-                if (finalBass < penultimateBass) "Weak Descent" else "Ascending Close"
+                if (finalRef < penultimateRef) "Weak Descent" else "Ascending Close"
             }
             else -> {
                 // Distances 5-6 are sixths/sevenths
-                if (finalBass < penultimateBass) "Weak Descent" else "Ascending Close"
+                if (finalRef < penultimateRef) "Weak Descent" else "Ascending Close"
             }
         }
 
