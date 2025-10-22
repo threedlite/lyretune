@@ -146,6 +146,12 @@ enum Temperament: String, CaseIterable {
     }
 }
 
+enum ChordReferenceMode: String, CaseIterable {
+    case bass = "Bass"
+    case middle = "Middle"
+    case mese = "Mese"
+}
+
 // MARK: - Audio Manager
 
 class AudioManager: ObservableObject {
@@ -2223,10 +2229,19 @@ class LyreChordAnalyzer {
         }
     }
 
-    func frequenciesToRatios(freqs: [Float]) -> [Int] {
-        guard !freqs.isEmpty, let minFreq = freqs.min() else { return [] }
+    func frequenciesToRatios(freqs: [Float], referenceFrequency: Float? = nil) -> [Int] {
+        guard !freqs.isEmpty else { return [] }
 
-        let ratios = freqs.map { $0 / minFreq }
+        // If reference_frequency is None, defaults to min(freqs) - backward compatible
+        let refFreq: Float
+        if let ref = referenceFrequency {
+            refFreq = ref
+        } else {
+            guard let minFreq = freqs.min() else { return [] }
+            refFreq = minFreq
+        }
+
+        let ratios = freqs.map { $0 / refFreq }
         let precision: Float = 10000
         let intRatios = ratios.map { bankersRound($0 * precision) }
 
@@ -2684,37 +2699,70 @@ class LyreVoicing {
     let semitones: [Int]
     let inversion: String
     let isAscending: Bool
+    let useMultiChordMese: Bool
+    let sortByCadence: Bool
+    let meseDegree: Int
+    let scaleSemitones: [Int]
 
-    init(chord: LyreChord, stringIndices: [Int], semitones: [Int]) {
+    init(chord: LyreChord, stringIndices: [Int], semitones: [Int], useMultiChordMese: Bool = false, sortByCadence: Bool = false, meseDegree: Int = 0, scaleSemitones: [Int] = []) {
         self.chord = chord
         self.stringIndices = stringIndices
         self.semitones = semitones
+        self.useMultiChordMese = useMultiChordMese
+        self.sortByCadence = sortByCadence
+        self.meseDegree = meseDegree
+        self.scaleSemitones = scaleSemitones
 
         // Determine inversion
-        let rootMod = chord.semitones[0] % 12
+        // When useMultiChordMese is true, calculate inversions relative to mese-centered root
         let bassMod = semitones[0] % 12
+
+        // Calculate expected chord tones for the re-centered chord
+        let chordTones: [Int]
+        if !sortByCadence && useMultiChordMese && !scaleSemitones.isEmpty {
+            // Build chord tones from re-centered root
+            let recenteredRootDegree = (chord.rootDegree - meseDegree + 7) % 7
+            let degreeOffsets: [Int]
+            switch chord.size {
+            case DYAD_SIZE:
+                degreeOffsets = [0, 2]
+            case TRIAD_SIZE:
+                degreeOffsets = [0, 2, 4]
+            case TETRAD_SIZE:
+                degreeOffsets = [0, 2, 4, 6]
+            default:
+                degreeOffsets = [0, 2, 4]
+            }
+            chordTones = degreeOffsets.map { offset in
+                let deg = (recenteredRootDegree + offset) % 7
+                return scaleSemitones[deg] % 12
+            }
+        } else {
+            // Traditional: use chord's original semitones
+            chordTones = chord.semitones.map { $0 % 12 }
+        }
 
         switch chord.size {
         case DYAD_SIZE:
-            self.inversion = (bassMod == rootMod) ? "root" : "1st"
+            self.inversion = (bassMod == chordTones[0]) ? "root" : "1st"
         case TRIAD_SIZE:
-            if bassMod == rootMod {
+            if bassMod == chordTones[0] {
                 self.inversion = "root"
-            } else if bassMod == chord.semitones[1] % 12 {
+            } else if bassMod == chordTones[1] {
                 self.inversion = "1st"
-            } else if bassMod == chord.semitones[2] % 12 {
+            } else if bassMod == chordTones[2] {
                 self.inversion = "2nd"
             } else {
                 self.inversion = "unk"
             }
         case TETRAD_SIZE:
-            if bassMod == rootMod {
+            if bassMod == chordTones[0] {
                 self.inversion = "root"
-            } else if bassMod == chord.semitones[1] % 12 {
+            } else if bassMod == chordTones[1] {
                 self.inversion = "1st"
-            } else if bassMod == chord.semitones[2] % 12 {
+            } else if bassMod == chordTones[2] {
                 self.inversion = "2nd"
-            } else if bassMod == chord.semitones[3] % 12 {
+            } else if bassMod == chordTones[3] {
                 self.inversion = "3rd"
             } else {
                 self.inversion = "unk"
@@ -2774,17 +2822,41 @@ class LyreProgressionAnalyzer {
     let chordAnalyzer: LyreChordAnalyzer
     let chords: [LyreChord]
     let voicings: [String: [LyreVoicing]]  // Key: "degree,size"
+    let useMultiChordMese: Bool
+    let chordReferenceMode: ChordReferenceMode
+    let sortByCadence: Bool
 
-    init(mode: Mode, firstNote: String, numStrings: Int, temperament: Temperament, octaveOffset: Int, scaleData: SettingsManager.ScaleData, chordAnalyzer: LyreChordAnalyzer) {
+    // Middle string of the lyre (mese in Ancient Greek music theory)
+    // For odd number: middle = (n+1)/2, for even: lower-middle = n/2
+    let meseStringIndex: Int
+
+    // Scale degree (0-6) of the mese string, used when useMultiChordMese is true
+    let meseDegree: Int
+
+    init(mode: Mode, firstNote: String, numStrings: Int, temperament: Temperament, octaveOffset: Int, scaleData: SettingsManager.ScaleData, chordAnalyzer: LyreChordAnalyzer, useMultiChordMese: Bool = false, chordReferenceMode: ChordReferenceMode = .bass, sortByCadence: Bool = false) {
         self.mode = mode
         self.firstNote = firstNote
         self.numStrings = numStrings
         self.temperament = temperament
         self.octaveOffset = octaveOffset
+        self.useMultiChordMese = useMultiChordMese
+        self.chordReferenceMode = chordReferenceMode
+        self.sortByCadence = sortByCadence
         self.scaleSemitones = MODE_SEMITONES[mode] ?? [0, 2, 4, 5, 7, 9, 11]
         self.frequencies = scaleData.frequencies
         self.noteNames = scaleData.notes
         self.chordAnalyzer = chordAnalyzer
+        self.meseStringIndex = (numStrings + 1) / 2
+        self.meseDegree = (self.meseStringIndex - 1) % scaleSemitones.count
+
+        // Debug logging to verify parameters
+        print("=== LyreProgressionAnalyzer Init ===")
+        print("useMultiChordMese: \(useMultiChordMese)")
+        print("chordReferenceMode: \(chordReferenceMode.rawValue)")
+        print("sortByCadence: \(sortByCadence)")
+        print("numStrings: \(numStrings)")
+        print("meseStringIndex (1-indexed): \(meseStringIndex)")
+        print("meseDegree (0-indexed): \(meseDegree)")
 
         // Build chords
         var chordList: [LyreChord] = []
@@ -2799,10 +2871,10 @@ class LyreProgressionAnalyzer {
         self.chords = chordList
 
         // Build voicings
-        self.voicings = Self.buildVoicings(chords: chordList, numStrings: numStrings, scaleSemitones: scaleSemitones)
+        self.voicings = Self.buildVoicings(chords: chordList, numStrings: numStrings, scaleSemitones: scaleSemitones, useMultiChordMese: useMultiChordMese, sortByCadence: sortByCadence, meseDegree: meseDegree)
     }
 
-    static func buildVoicings(chords: [LyreChord], numStrings: Int, scaleSemitones: [Int]) -> [String: [LyreVoicing]] {
+    static func buildVoicings(chords: [LyreChord], numStrings: Int, scaleSemitones: [Int], useMultiChordMese: Bool = false, sortByCadence: Bool = false, meseDegree: Int = 0) -> [String: [LyreVoicing]] {
         var voicingsByChord: [String: [LyreVoicing]] = [:]
 
         for chord in chords {
@@ -2821,7 +2893,7 @@ class LyreProgressionAnalyzer {
 
                 // Check if valid voicing
                 if isValidVoicing(semitones: semitones, chord: chord) {
-                    let voicing = LyreVoicing(chord: chord, stringIndices: strings.map { $0 + 1 }, semitones: semitones)
+                    let voicing = LyreVoicing(chord: chord, stringIndices: strings.map { $0 + 1 }, semitones: semitones, useMultiChordMese: useMultiChordMese, sortByCadence: sortByCadence, meseDegree: meseDegree, scaleSemitones: scaleSemitones)
                     voicingList.append(voicing)
                 }
             }
@@ -2981,9 +3053,33 @@ class LyreProgressionAnalyzer {
             return 10.0
         }
 
+        // Determine reference frequency based on chordReferenceMode
+        // When prioritizing Western cadences, always use bass (traditional approach)
+        let referenceFrequency: Float?
+        if sortByCadence {
+            referenceFrequency = nil  // Use default bass note for Western cadences
+        } else {
+            switch chordReferenceMode {
+            case .bass:
+                referenceFrequency = nil  // Use default (minimum)
+            case .middle:
+                // Use middle note of the chord (or lower-middle if even)
+                let middleIdx = (freqs.count + 1) / 2 - 1  // Convert to 0-indexed
+                referenceFrequency = middleIdx >= 0 && middleIdx < freqs.count ? Float(freqs[middleIdx]) : nil
+            case .mese:
+                // Use middle string of lyre (mese)
+                let meseIdx = meseStringIndex - 1  // Convert to 0-indexed
+                if meseIdx >= 0 && meseIdx < frequencies.count {
+                    referenceFrequency = Float(frequencies[meseIdx])
+                } else {
+                    referenceFrequency = nil  // Fall back to default if invalid
+                }
+            }
+        }
+
         // Convert to ratios
         let freqsFloat = freqs.map { Float($0) }
-        let ratios = chordAnalyzer.frequenciesToRatios(freqs: freqsFloat)
+        let ratios = chordAnalyzer.frequenciesToRatios(freqs: freqsFloat, referenceFrequency: referenceFrequency)
 
         // Calculate chord complexity
         let chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(notes: ratios)
@@ -3028,7 +3124,24 @@ class LyreProgressionAnalyzer {
     }
 
     func rootMovementComplexity(chord1: LyreChord, chord2: LyreChord) -> Double {
-        let degreeDistance = (chord2.rootDegree - chord1.rootDegree + 7) % 7
+        // Calculate distance between chord root degrees
+        // When sortByCadence is true (Western cadences), always use degree 0 as tonic
+        // When sortByCadence is false and useMultiChordMese is true, use meseDegree as tonic
+        let degreeDistance: Int
+        if !sortByCadence && useMultiChordMese {
+            // Re-center both chord degrees around mese as degree 0
+            let degree1FromMese = (chord1.rootDegree - meseDegree + 7) % 7
+            let degree2FromMese = (chord2.rootDegree - meseDegree + 7) % 7
+            // Calculate distance between re-centered degrees
+            let dist = (degree2FromMese - degree1FromMese + 7) % 7
+            print("RootMovement: Using MESE: \(chord1.rootDegree)→\(chord2.rootDegree), re-centered: \(degree1FromMese)→\(degree2FromMese) (meseDegree=\(meseDegree)), distance=\(dist)")
+            degreeDistance = dist
+        } else {
+            // Traditional: degree 0 is tonic (first string)
+            let dist = (chord2.rootDegree - chord1.rootDegree + 7) % 7
+            print("RootMovement: Traditional: \(chord1.rootDegree)→\(chord2.rootDegree), distance=\(dist)")
+            degreeDistance = dist
+        }
         return ROOT_MOVEMENT_STRENGTH[degreeDistance] ?? 1.0
     }
 
@@ -3120,7 +3233,17 @@ class LyreProgressionAnalyzer {
         let finalChord = chords[chords.count - 1]
 
         // 1. ROOT MOTION PATTERN
-        let rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+        // Re-center degrees around mese if using multi-chord mese mode
+        let rootDegreeDistance: Int
+        if !sortByCadence && useMultiChordMese {
+            // Re-center both degrees around mese
+            let penultimateDegreeFromMese = (penultimateChord.rootDegree - meseDegree + 7) % 7
+            let finalDegreeFromMese = (finalChord.rootDegree - meseDegree + 7) % 7
+            rootDegreeDistance = (finalDegreeFromMese - penultimateDegreeFromMese + 7) % 7
+        } else {
+            // Traditional: use original degrees
+            rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+        }
 
         // Compare actual bass notes (first notes) of voicings, not theoretical root pitch classes
         let penultimateBass = penultimateVoicing.semitones.first ?? penultimateChord.rootSemitone
@@ -3339,30 +3462,48 @@ class LyreProgressionAnalyzer {
 
         return progressions.map { prog in
             let chordDegrees = prog.chords.map { $0.rootDegree }
+
+            // Transform chord degrees if using mese as tonic
+            // When sortByCadence is true (Western cadences), ignore useMultiChordMese
+            let degreesForMatching: [Int]
+            if !sortByCadence && useMultiChordMese {
+                // Re-center degrees around mese as degree 0
+                degreesForMatching = chordDegrees.map { ($0 - meseDegree + 7) % 7 }
+            } else {
+                // Use original degrees (degree 0 is tonic)
+                degreesForMatching = chordDegrees
+            }
+
             let allTriads = prog.chords.allSatisfy { $0.size == TRIAD_SIZE }
 
-            if allTriads && chordDegrees.count >= 2 {
+            if allTriads && degreesForMatching.count >= 2 {
                 // Check full progression patterns first (for famous progressions)
                 var name: String? = nil
 
-                switch chordDegrees.count {
+                switch degreesForMatching.count {
                 case 3:
-                    name = threeChordPatterns[mode]?[chordDegrees]
+                    name = threeChordPatterns[mode]?[degreesForMatching]
                 case 4:
-                    name = fourChordPatterns[mode]?[chordDegrees]
+                    name = fourChordPatterns[mode]?[degreesForMatching]
                 default:
                     break
                 }
 
                 // Fall back to cadence (last two chords)
                 if name == nil {
-                    let lastTwo = Array(chordDegrees.suffix(2))
+                    let lastTwo = Array(degreesForMatching.suffix(2))
                     name = twoChordPatterns[mode]?[lastTwo]
                 }
 
                 if let foundName = name {
                     prog.commonName = foundName
-                    print("CadenceID: Found \(foundName) for degrees \(chordDegrees) in mode \(mode.rawValue)")
+                    let degreeInfo: String
+                    if !sortByCadence && useMultiChordMese {
+                        degreeInfo = "original degrees \(chordDegrees) (transformed to \(degreesForMatching) with mese=\(meseDegree))"
+                    } else {
+                        degreeInfo = "degrees \(chordDegrees)"
+                    }
+                    print("CadenceID: Found \(foundName) for \(degreeInfo) in mode \(mode.rawValue)")
                 }
             }
 
@@ -3423,6 +3564,8 @@ struct ChordProgressionView: View {
     @State private var selectedChordSizes: Set<Int> = [3]
     @State private var selectedProgressionLength = 4
     @State private var sortByCadence = false
+    @State private var useMultiChordMese = false
+    @State private var chordReferenceMode: ChordReferenceMode = .bass
 
     // Audio playback state
     @State private var audioManager: ChordProgressionAudioManager?
@@ -3507,6 +3650,38 @@ struct ChordProgressionView: View {
                             // Sort by cadence toggle
                             Toggle("Prioritize common modern Western cadences (Just)", isOn: $sortByCadence)
                                 .padding(.top, 8)
+
+                            // Multi-chord mese toggle
+                            HStack {
+                                Toggle("Multi-chord metrics: use mese (middle string) as tonic:", isOn: $useMultiChordMese)
+                                    .disabled(sortByCadence)
+                                    .foregroundColor(sortByCadence ? Color.gray : Color.primary)
+                            }
+                            .padding(.top, 8)
+
+                            // Single chord reference frequency
+                            Text("Single chord reference frequency:")
+                                .font(.subheadline)
+                                .foregroundColor(sortByCadence ? Color.gray : Color.primary)
+                                .padding(.top, 8)
+                            HStack(spacing: 8) {
+                                ForEach([ChordReferenceMode.bass, ChordReferenceMode.middle, ChordReferenceMode.mese], id: \.self) { mode in
+                                    Button(action: {
+                                        if !sortByCadence {
+                                            chordReferenceMode = mode
+                                        }
+                                    }) {
+                                        Text(mode.rawValue)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 6)
+                                            .background(chordReferenceMode == mode ? Color.blue : Color.gray.opacity(0.3))
+                                            .foregroundColor(.white)
+                                            .cornerRadius(6)
+                                            .opacity(sortByCadence ? 0.5 : 1.0)
+                                    }
+                                    .disabled(sortByCadence)
+                                }
+                            }
                         }
                         .padding()
                         .background(Color.gray.opacity(0.1))
@@ -3671,6 +3846,8 @@ struct ChordProgressionView: View {
             let progressionLength = await MainActor.run { self.selectedProgressionLength }
             let chordSizes = await MainActor.run { self.selectedChordSizes }
             let sortByCadence = await MainActor.run { self.sortByCadence }
+            let useMultiChordMese = await MainActor.run { self.useMultiChordMese }
+            let chordReferenceMode = await MainActor.run { self.chordReferenceMode }
 
             try Task.checkCancellation()
 
@@ -3682,7 +3859,10 @@ struct ChordProgressionView: View {
                 temperament: temperament,
                 octaveOffset: octaveOffset,
                 scaleData: scaleData,
-                chordAnalyzer: chordAnalyzer
+                chordAnalyzer: chordAnalyzer,
+                useMultiChordMese: useMultiChordMese,
+                chordReferenceMode: chordReferenceMode,
+                sortByCadence: sortByCadence
             )
 
             try Task.checkCancellation()
@@ -3892,7 +4072,7 @@ struct ProgressionRow: View {
 
                 // Display each chord on separate lines
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(progression.notes.components(separatedBy: "  "), id: \.self) { chordNotes in
+                    ForEach(Array(progression.notes.components(separatedBy: "  ").enumerated()), id: \.offset) { index, chordNotes in
                         ChordSymbolsView(text: chordNotes, isLarge: false)
                     }
                 }

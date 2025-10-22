@@ -1042,16 +1042,6 @@ data class LyreVoicing(
     init {
         // Determine inversion
         // When useMultiChordMese is true, calculate inversions relative to mese-centered root
-        val rootMod = if (!sortByCadence && useMultiChordMese && scaleSemitones.isNotEmpty()) {
-            // Re-center the chord's root degree around mese
-            val recenteredRootDegree = (chord.rootDegree - meseDegree + 7) % 7
-            // Get the semitone of the re-centered root
-            scaleSemitones[recenteredRootDegree] % 12
-        } else {
-            // Traditional: use chord's original root
-            chord.semitones[0] % 12
-        }
-
         val bassMod = semitones[0] % 12
 
         // Calculate expected chord tones for the re-centered chord
