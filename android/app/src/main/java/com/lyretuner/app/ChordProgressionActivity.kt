@@ -27,6 +27,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +44,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.*
 
+// Data class for non-Western cadence analysis
+data class CadenceAnalysis(
+    val motion: String,           // Strong Descent, Weak Descent, Ascending Close, Static
+    val voiceLeading: String,     // Smooth, Moderate, Active
+    val harmonicDirection: String, // Resolving, Tensing, Neutral
+    val closureStrength: String   // Terminal, Suspensive, Continuous
+)
+
 // Data class for displaying progressions
 data class ProgressionDisplay(
     val rank: Int,
@@ -49,7 +60,8 @@ data class ProgressionDisplay(
     val commonName: String?,    // Common progression name (e.g., "Authentic Cadence (V-I)")
     val complexity: Double,
     val frequencies: List<Float>,
-    val notesPerChord: List<Int>  // How many notes in each chord
+    val notesPerChord: List<Int>,  // How many notes in each chord
+    val cadenceAnalysis: CadenceAnalysis? = null  // Non-Western cadence characterization
 )
 
 class ChordProgressionActivity : ComponentActivity() {
@@ -491,21 +503,69 @@ fun ProgressionRow(
                             color = MaterialTheme.colorScheme.tertiary
                         )
                     }
+                    // Chord symbols (Roman numerals) - only when Western cadence is ON
+                    Text(
+                        text = progression.chordSymbols,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else {
+                    // Show cadence analysis when Western cadence is OFF
+                    progression.cadenceAnalysis?.let { analysis ->
+                        Text(
+                            text = buildAnnotatedString {
+                                // Motion
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                                    append("Motion: ")
+                                }
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                                    append(analysis.motion)
+                                }
+                                append("\n")
+
+                                // Voice Leading
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                                    append("Voice: ")
+                                }
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                                    append(analysis.voiceLeading)
+                                }
+                                append("\n")
+
+                                // Harmonic Direction
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                                    append("Direction: ")
+                                }
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                                    append(analysis.harmonicDirection)
+                                }
+                                append("\n")
+
+                                // Closure Strength
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                                    append("Closure: ")
+                                }
+                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) {
+                                    append(analysis.closureStrength)
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
-                // Chord symbols (Roman numerals)
-                Text(
-                    text = progression.chordSymbols,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                // Note names (smaller, secondary)
-                Text(
-                    text = progression.notes,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // Note names (smaller, secondary) - each chord on separate line
+                Column {
+                    progression.notes.split("  ").forEach { chordNotes ->
+                        Text(
+                            text = chordNotes,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             // Complexity
@@ -1129,37 +1189,38 @@ class LyreProgressionAnalyzer(
         return ROOT_MOVEMENT_STRENGTH[degreeDistance] ?: 1.0
     }
 
+    private fun calculateChordComplexity(voicing: LyreVoicing, chord: Chord): Double {
+        // Get frequencies for this voicing with bounds checking
+        val freqs = voicing.stringIndices.mapNotNull {
+            val index = it - 1
+            if (index >= 0 && index < frequencies.size) {
+                frequencies[index]
+            } else {
+                null
+            }
+        }
+
+        if (freqs.size != voicing.stringIndices.size) {
+            // Some indices were invalid, return high complexity
+            return 10.0
+        }
+
+        // Convert to ratios
+        val ratios = chordAnalyzer.frequenciesToRatios(freqs)
+
+        // Calculate chord complexity
+        val chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(ratios)
+
+        // Add voicing penalty
+        return chordComplexity + voicing.voicingPenalty()
+    }
+
     private fun calculateProgressionComplexity(voicingSequence: List<LyreVoicing>): Double {
         var complexity = 0.0
 
         // Individual chord complexities
         for (voicing in voicingSequence) {
-            // Get frequencies for this voicing with bounds checking
-            val freqs = voicing.stringIndices.mapNotNull {
-                val index = it - 1
-                if (index >= 0 && index < frequencies.size) {
-                    frequencies[index]
-                } else {
-                    android.util.Log.e("ChordProgression", "Invalid string index: $it (0-based: $index) for ${frequencies.size} strings")
-                    null
-                }
-            }
-
-            if (freqs.size != voicing.stringIndices.size) {
-                // Some indices were invalid, skip this voicing
-                android.util.Log.w("ChordProgression", "Skipping voicing due to invalid indices")
-                continue
-            }
-
-            // Convert to ratios
-            val ratios = chordAnalyzer.frequenciesToRatios(freqs)
-
-            // Calculate chord complexity
-            val chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(ratios)
-            complexity += chordComplexity
-
-            // Voicing penalty
-            complexity += voicing.voicingPenalty()
+            complexity += calculateChordComplexity(voicing, voicing.chord)
         }
 
         // Voice leading distances
@@ -1374,6 +1435,88 @@ class LyreProgressionAnalyzer(
 
         backtrack(0, mutableListOf())
         return result
+    }
+
+    // Analyze cadence characteristics for non-Western display
+    fun analyzeCadenceCharacteristics(progression: Progression): CadenceAnalysis {
+        // Analyze the final two chords for cadence characteristics
+        val voicings = progression.voicings
+        val chords = progression.chords
+
+        if (voicings.size < 2) {
+            return CadenceAnalysis("Static", "Smooth", "Neutral", "Continuous")
+        }
+
+        val penultimateVoicing = voicings[voicings.size - 2]
+        val finalVoicing = voicings[voicings.size - 1]
+        val penultimateChord = chords[chords.size - 2]
+        val finalChord = chords[chords.size - 1]
+
+        // 1. ROOT MOTION PATTERN
+        val rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+
+        // Compare actual bass notes (first notes) of voicings, not theoretical root pitch classes
+        val penultimateBass = penultimateVoicing.semitones.firstOrNull() ?: penultimateChord.rootSemitone
+        val finalBass = finalVoicing.semitones.firstOrNull() ?: finalChord.rootSemitone
+
+        val motion = when {
+            // Check if bass notes are the same first (handles inversions with same bass)
+            penultimateBass == finalBass -> "Static"
+            rootDegreeDistance == 0 -> "Static"
+            rootDegreeDistance in listOf(3, 4) -> {
+                // Distances 3-4 are fourths/fifths (strong intervals)
+                if (finalBass < penultimateBass) "Strong Descent" else "Ascending Close"
+            }
+            rootDegreeDistance in listOf(1, 2) -> {
+                // Distances 1-2 are seconds/thirds (weak intervals)
+                if (finalBass < penultimateBass) "Weak Descent" else "Ascending Close"
+            }
+            else -> {
+                // Distances 5-6 are sixths/sevenths
+                if (finalBass < penultimateBass) "Weak Descent" else "Ascending Close"
+            }
+        }
+
+        // 2. VOICE LEADING CHARACTER
+        // Count how many voices move between chords (using actual semitones, not pitch classes)
+        val penultimateSemitones = penultimateVoicing.semitones.toSet()
+        val finalSemitones = finalVoicing.semitones.toSet()
+        val commonTones = penultimateSemitones.intersect(finalSemitones).size
+
+        // Calculate voices moved from the perspective of the chord with more notes
+        val totalVoices = maxOf(penultimateVoicing.semitones.size, finalVoicing.semitones.size)
+        val voicesMoved = totalVoices - commonTones
+
+        val voiceLeading = when (voicesMoved) {
+            0, 1 -> "Smooth"
+            2 -> "Moderate"
+            else -> "Active"
+        }
+
+        // 3. HARMONIC DIRECTION
+        // Calculate individual chord complexities
+        val penultimateComplexity = calculateChordComplexity(penultimateVoicing, penultimateChord)
+        val finalComplexity = calculateChordComplexity(finalVoicing, finalChord)
+        val complexityDelta = finalComplexity - penultimateComplexity
+
+        val harmonicDirection = when {
+            complexityDelta < -0.5 -> "Resolving"
+            complexityDelta > 0.5 -> "Tensing"
+            else -> "Neutral"
+        }
+
+        // 4. CLOSURE STRENGTH
+        val isStrongDescent = (motion == "Strong Descent")
+        val isResolving = (harmonicDirection == "Resolving")
+        val isRootPosition = finalVoicing.inversion == "root"
+
+        val closureStrength = when {
+            isStrongDescent && isResolving && isRootPosition -> "Terminal"
+            motion == "Ascending Close" || harmonicDirection == "Tensing" || !isRootPosition -> "Suspensive"
+            else -> "Continuous"
+        }
+
+        return CadenceAnalysis(motion, voiceLeading, harmonicDirection, closureStrength)
     }
 
     fun identifyCommonProgressions(progressionsByLength: Map<Int, List<Progression>>): Map<Int, List<Progression>> {
@@ -1714,6 +1857,9 @@ class LyreProgressionAnalyzer(
 
                 android.util.Log.d("ChordProgDisplay", "Rank ${rank + 1}: ${prog.voicings.size} chords, notesPerChord=$notesPerChord, totalFreqs=${allFrequencies.size}")
 
+                // Calculate cadence analysis for non-Western display
+                val cadenceAnalysis = analyzeCadenceCharacteristics(prog)
+
                 displayList.add(
                     ProgressionDisplay(
                         rank = rank + 1,
@@ -1722,7 +1868,8 @@ class LyreProgressionAnalyzer(
                         commonName = prog.commonName,
                         complexity = prog.complexity,
                         frequencies = allFrequencies,
-                        notesPerChord = notesPerChord
+                        notesPerChord = notesPerChord,
+                        cadenceAnalysis = cadenceAnalysis
                     )
                 )
             }

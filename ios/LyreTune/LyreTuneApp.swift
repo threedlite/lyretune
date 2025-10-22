@@ -2968,25 +2968,36 @@ class LyreProgressionAnalyzer {
         return result
     }
 
+    private func calculateChordComplexity(voicing: LyreVoicing, chord: LyreChord) -> Double {
+        // Get frequencies for this voicing with bounds checking
+        let freqs = voicing.stringIndices.compactMap { index -> Double? in
+            let idx = index - 1
+            guard idx >= 0 && idx < frequencies.count else { return nil }
+            return frequencies[idx]
+        }
+
+        if freqs.count != voicing.stringIndices.count {
+            // Some indices were invalid, return high complexity
+            return 10.0
+        }
+
+        // Convert to ratios
+        let freqsFloat = freqs.map { Float($0) }
+        let ratios = chordAnalyzer.frequenciesToRatios(freqs: freqsFloat)
+
+        // Calculate chord complexity
+        let chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(notes: ratios)
+
+        // Add voicing penalty
+        return chordComplexity + voicing.voicingPenalty()
+    }
+
     func calculateProgressionComplexity(voicingSequence: [LyreVoicing]) -> Double {
         var complexity = 0.0
 
         // Individual chord complexities
         for voicing in voicingSequence {
-            let freqs = voicing.stringIndices.compactMap { index -> Double? in
-                let idx = index - 1
-                guard idx >= 0 && idx < frequencies.count else { return nil }
-                return frequencies[idx]
-            }
-
-            if freqs.count == voicing.stringIndices.count {
-                let freqsFloat = freqs.map { Float($0) }
-                let ratios = chordAnalyzer.frequenciesToRatios(freqs: freqsFloat)
-                let chordComplexity = chordAnalyzer.complexityWithFiveAdjustments(notes: ratios)
-                complexity += chordComplexity
-            }
-
-            complexity += voicing.voicingPenalty()
+            complexity += calculateChordComplexity(voicing: voicing, chord: voicing.chord)
         }
 
         // Voice leading distances
@@ -3073,6 +3084,9 @@ class LyreProgressionAnalyzer {
                 notesPerChord.append(freqs.count)
             }
 
+            // Calculate cadence analysis for non-Western display
+            let cadenceAnalysis = analyzeCadenceCharacteristics(progression: prog)
+
             displayList.append(ProgressionDisplay(
                 rank: rank + 1,
                 notes: noteSequence,
@@ -3080,13 +3094,104 @@ class LyreProgressionAnalyzer {
                 commonName: prog.commonName,
                 complexity: prog.complexity,
                 frequencies: allFrequencies,
-                notesPerChord: notesPerChord
+                notesPerChord: notesPerChord,
+                cadenceAnalysis: cadenceAnalysis
             ))
         }
 
         print("\n=== Total results returned: \(displayList.count) ===\n")
 
         return displayList
+    }
+
+    // Analyze cadence characteristics for non-Western display
+    func analyzeCadenceCharacteristics(progression: LyreProgression) -> CadenceAnalysis {
+        // Analyze the final two chords for cadence characteristics
+        let voicings = progression.voicings
+        let chords = progression.chords
+
+        if voicings.count < 2 {
+            return CadenceAnalysis(motion: "Static", voiceLeading: "Smooth", harmonicDirection: "Neutral", closureStrength: "Continuous")
+        }
+
+        let penultimateVoicing = voicings[voicings.count - 2]
+        let finalVoicing = voicings[voicings.count - 1]
+        let penultimateChord = chords[chords.count - 2]
+        let finalChord = chords[chords.count - 1]
+
+        // 1. ROOT MOTION PATTERN
+        let rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+
+        // Compare actual bass notes (first notes) of voicings, not theoretical root pitch classes
+        let penultimateBass = penultimateVoicing.semitones.first ?? penultimateChord.rootSemitone
+        let finalBass = finalVoicing.semitones.first ?? finalChord.rootSemitone
+
+        let motion: String
+        if penultimateBass == finalBass {
+            // Check if bass notes are the same first (handles inversions with same bass)
+            motion = "Static"
+        } else if rootDegreeDistance == 0 {
+            motion = "Static"
+        } else if rootDegreeDistance == 3 || rootDegreeDistance == 4 {
+            // Distances 3-4 are fourths/fifths (strong intervals)
+            motion = finalBass < penultimateBass ? "Strong Descent" : "Ascending Close"
+        } else if rootDegreeDistance == 1 || rootDegreeDistance == 2 {
+            // Distances 1-2 are seconds/thirds (weak intervals)
+            motion = finalBass < penultimateBass ? "Weak Descent" : "Ascending Close"
+        } else {
+            // Distances 5-6 are sixths/sevenths
+            motion = finalBass < penultimateBass ? "Weak Descent" : "Ascending Close"
+        }
+
+        // 2. VOICE LEADING CHARACTER
+        // Count how many voices move between chords (using actual semitones, not pitch classes)
+        let penultimateSemitones = Set(penultimateVoicing.semitones)
+        let finalSemitones = Set(finalVoicing.semitones)
+        let commonTones = penultimateSemitones.intersection(finalSemitones).count
+
+        // Calculate voices moved from the perspective of the chord with more notes
+        let totalVoices = max(penultimateVoicing.semitones.count, finalVoicing.semitones.count)
+        let voicesMoved = totalVoices - commonTones
+
+        let voiceLeading: String
+        if voicesMoved <= 1 {
+            voiceLeading = "Smooth"
+        } else if voicesMoved == 2 {
+            voiceLeading = "Moderate"
+        } else {
+            voiceLeading = "Active"
+        }
+
+        // 3. HARMONIC DIRECTION
+        // Calculate individual chord complexities
+        let penultimateComplexity = calculateChordComplexity(voicing: penultimateVoicing, chord: penultimateChord)
+        let finalComplexity = calculateChordComplexity(voicing: finalVoicing, chord: finalChord)
+        let complexityDelta = finalComplexity - penultimateComplexity
+
+        let harmonicDirection: String
+        if complexityDelta < -0.5 {
+            harmonicDirection = "Resolving"
+        } else if complexityDelta > 0.5 {
+            harmonicDirection = "Tensing"
+        } else {
+            harmonicDirection = "Neutral"
+        }
+
+        // 4. CLOSURE STRENGTH
+        let isStrongDescent = (motion == "Strong Descent")
+        let isResolving = (harmonicDirection == "Resolving")
+        let isRootPosition = finalVoicing.inversion == "root"
+
+        let closureStrength: String
+        if isStrongDescent && isResolving && isRootPosition {
+            closureStrength = "Terminal"
+        } else if motion == "Ascending Close" || harmonicDirection == "Tensing" || !isRootPosition {
+            closureStrength = "Suspensive"
+        } else {
+            closureStrength = "Continuous"
+        }
+
+        return CadenceAnalysis(motion: motion, voiceLeading: voiceLeading, harmonicDirection: harmonicDirection, closureStrength: closureStrength)
     }
 
     func identifyCommonProgressions(progressions: [LyreProgression]) -> [LyreProgression] {
@@ -3283,6 +3388,15 @@ class LyreProgressionAnalyzer {
 }
 
 // Data structures for chord progressions
+
+// Non-Western cadence analysis
+struct CadenceAnalysis {
+    let motion: String           // Strong Descent, Weak Descent, Ascending Close, Static
+    let voiceLeading: String     // Smooth, Moderate, Active
+    let harmonicDirection: String // Resolving, Tensing, Neutral
+    let closureStrength: String   // Terminal, Suspensive, Continuous
+}
+
 struct ProgressionDisplay: Identifiable {
     let id = UUID()
     let rank: Int
@@ -3292,6 +3406,7 @@ struct ProgressionDisplay: Identifiable {
     let complexity: Double
     let frequencies: [Double]
     let notesPerChord: [Int]
+    let cadenceAnalysis: CadenceAnalysis?
 }
 
 // MARK: - Chord Progression View
@@ -3736,13 +3851,51 @@ struct ProgressionRow: View {
 
             // Chord symbols and notes
             VStack(alignment: .leading, spacing: 2) {
-                if showCadenceLabels, let name = progression.commonName {
-                    Text(name)
-                        .font(.caption)
-                        .foregroundColor(.orange)
+                if showCadenceLabels {
+                    // Western cadence mode
+                    if let name = progression.commonName {
+                        Text(name)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    ChordSymbolsView(text: progression.chordSymbols, isLarge: true)
+                } else {
+                    // Non-Western cadence analysis mode
+                    if let analysis = progression.cadenceAnalysis {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 0) {
+                                Text("Motion: ").foregroundColor(.gray)
+                                Text(analysis.motion).foregroundColor(.blue)
+                            }
+                            .font(.system(.caption, design: .monospaced))
+
+                            HStack(spacing: 0) {
+                                Text("Voice: ").foregroundColor(.gray)
+                                Text(analysis.voiceLeading).foregroundColor(.blue)
+                            }
+                            .font(.system(.caption, design: .monospaced))
+
+                            HStack(spacing: 0) {
+                                Text("Direction: ").foregroundColor(.gray)
+                                Text(analysis.harmonicDirection).foregroundColor(.blue)
+                            }
+                            .font(.system(.caption, design: .monospaced))
+
+                            HStack(spacing: 0) {
+                                Text("Closure: ").foregroundColor(.gray)
+                                Text(analysis.closureStrength).foregroundColor(.blue)
+                            }
+                            .font(.system(.caption, design: .monospaced))
+                        }
+                    }
                 }
-                ChordSymbolsView(text: progression.chordSymbols, isLarge: true)
-                ChordSymbolsView(text: progression.notes, isLarge: false)
+
+                // Display each chord on separate lines
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(progression.notes.components(separatedBy: "  "), id: \.self) { chordNotes in
+                        ChordSymbolsView(text: chordNotes, isLarge: false)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
