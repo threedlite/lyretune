@@ -339,11 +339,13 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                         Text(
                             text = "Multi-chord metrics: use mese (middle string) as tonic:",
                             style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            color = if (sortByCadence) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f) else MaterialTheme.colorScheme.onSurface
                         )
                         Switch(
                             checked = useMultiChordMese,
-                            onCheckedChange = { useMultiChordMese = it }
+                            onCheckedChange = { useMultiChordMese = it },
+                            enabled = !sortByCadence
                         )
                     }
 
@@ -353,7 +355,8 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                     Text(
                         text = "Single chord reference frequency:",
                         style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(bottom = 4.dp)
+                        modifier = Modifier.padding(bottom = 4.dp),
+                        color = if (sortByCadence) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f) else MaterialTheme.colorScheme.onSurface
                     )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -363,19 +366,22 @@ fun ChordProgressionScreen(context: Context, onBackPressed: () -> Unit) {
                             selected = chordReferenceMode == ChordReferenceMode.BASS,
                             onClick = { chordReferenceMode = ChordReferenceMode.BASS },
                             label = { Text("Bass") },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            enabled = !sortByCadence
                         )
                         FilterChip(
                             selected = chordReferenceMode == ChordReferenceMode.MIDDLE,
                             onClick = { chordReferenceMode = ChordReferenceMode.MIDDLE },
                             label = { Text("Middle") },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            enabled = !sortByCadence
                         )
                         FilterChip(
                             selected = chordReferenceMode == ChordReferenceMode.MESE,
                             onClick = { chordReferenceMode = ChordReferenceMode.MESE },
                             label = { Text("Mese") },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            enabled = !sortByCadence
                         )
                     }
                 }
@@ -1024,32 +1030,65 @@ data class Chord(
 data class LyreVoicing(
     val chord: Chord,
     val stringIndices: List<Int>, // 1-indexed
-    val semitones: List<Int>
+    val semitones: List<Int>,
+    val useMultiChordMese: Boolean = false,
+    val sortByCadence: Boolean = false,
+    val meseDegree: Int = 0,
+    val scaleSemitones: List<Int> = emptyList()
 ) {
     val inversion: String
     val isAscending: Boolean
 
     init {
         // Determine inversion
-        val rootMod = chord.semitones[0] % 12
+        // When useMultiChordMese is true, calculate inversions relative to mese-centered root
+        val rootMod = if (!sortByCadence && useMultiChordMese && scaleSemitones.isNotEmpty()) {
+            // Re-center the chord's root degree around mese
+            val recenteredRootDegree = (chord.rootDegree - meseDegree + 7) % 7
+            // Get the semitone of the re-centered root
+            scaleSemitones[recenteredRootDegree] % 12
+        } else {
+            // Traditional: use chord's original root
+            chord.semitones[0] % 12
+        }
+
         val bassMod = semitones[0] % 12
 
+        // Calculate expected chord tones for the re-centered chord
+        val chordTones = if (!sortByCadence && useMultiChordMese && scaleSemitones.isNotEmpty()) {
+            // Build chord tones from re-centered root
+            val recenteredRootDegree = (chord.rootDegree - meseDegree + 7) % 7
+            val degreeOffsets = when (chord.size) {
+                DYAD_SIZE -> listOf(0, 2)
+                TRIAD_SIZE -> listOf(0, 2, 4)
+                TETRAD_SIZE -> listOf(0, 2, 4, 6)
+                else -> listOf(0, 2, 4)
+            }
+            degreeOffsets.map { offset ->
+                val deg = (recenteredRootDegree + offset) % 7
+                scaleSemitones[deg] % 12
+            }
+        } else {
+            // Traditional: use chord's original semitones
+            chord.semitones.map { it % 12 }
+        }
+
         inversion = when (chord.size) {
-            DYAD_SIZE -> if (bassMod == rootMod) "root" else "1st"
+            DYAD_SIZE -> if (bassMod == chordTones[0]) "root" else "1st"
             TRIAD_SIZE -> {
                 when (bassMod) {
-                    rootMod -> "root"
-                    chord.semitones[1] % 12 -> "1st"
-                    chord.semitones[2] % 12 -> "2nd"
+                    chordTones[0] -> "root"
+                    chordTones[1] -> "1st"
+                    chordTones[2] -> "2nd"
                     else -> "unk"
                 }
             }
             TETRAD_SIZE -> {
                 when (bassMod) {
-                    rootMod -> "root"
-                    chord.semitones[1] % 12 -> "1st"
-                    chord.semitones[2] % 12 -> "2nd"
-                    chord.semitones[3] % 12 -> "3rd"
+                    chordTones[0] -> "root"
+                    chordTones[1] -> "1st"
+                    chordTones[2] -> "2nd"
+                    chordTones[3] -> "3rd"
                     else -> "unk"
                 }
             }
@@ -1118,6 +1157,10 @@ class LyreProgressionAnalyzer(
     // For odd number: middle = (n+1)/2, for even: lower-middle = n/2
     private val meseStringIndex: Int = (numStrings + 1) / 2
 
+    // Scale degree (0-6) of the mese string, used when useMultiChordMese is true
+    // Lazy because it depends on scaleSemitones which is initialized in init block
+    private val meseDegree: Int by lazy { (meseStringIndex - 1) % scaleSemitones.size }
+
     // Same parameters as chord analyzer
     private val params = mapOf(
         "augmented_penalty" to 0.6,
@@ -1143,7 +1186,17 @@ class LyreProgressionAnalyzer(
             "Maximum $MAX_STRINGS_SUPPORTED strings supported, got $numStrings"
         }
 
+        // Debug logging to verify parameters
+        android.util.Log.d("ProgAnalyzer", "=== LyreProgressionAnalyzer Init ===")
+        android.util.Log.d("ProgAnalyzer", "useMultiChordMese: $useMultiChordMese")
+        android.util.Log.d("ProgAnalyzer", "chordReferenceMode: $chordReferenceMode")
+        android.util.Log.d("ProgAnalyzer", "sortByCadence: $sortByCadence")
+        android.util.Log.d("ProgAnalyzer", "numStrings: $numStrings")
+        android.util.Log.d("ProgAnalyzer", "meseStringIndex (1-indexed): $meseStringIndex")
+
         scaleSemitones = MODE_SEMITONES[mode] ?: listOf(0, 2, 4, 5, 7, 9, 11)
+
+        android.util.Log.d("ProgAnalyzer", "meseDegree (0-indexed): ${(meseStringIndex - 1) % scaleSemitones.size}")
 
         // Create chord analyzer to get just intonation frequencies
         chordAnalyzer = LyreChordAnalyzer(
@@ -1214,7 +1267,11 @@ class LyreProgressionAnalyzer(
                     val voicing = LyreVoicing(
                         chord,
                         strings.map { it + 1 }, // 1-indexed
-                        semitones
+                        semitones,
+                        useMultiChordMese,
+                        sortByCadence,
+                        meseDegree,
+                        scaleSemitones
                     )
                     voicingList.add(voicing)
                 }
@@ -1286,8 +1343,11 @@ class LyreProgressionAnalyzer(
             ChordReferenceMode.MESE -> {
                 // Use mese (middle string of lyre)
                 val meseIdx = meseStringIndex - 1  // Convert to 0-indexed
-                if (meseIdx >= 0 && meseIdx < scaleSemitones.size) {
-                    scaleSemitones[meseIdx]
+                if (meseIdx >= 0 && meseIdx < numStrings) {
+                    // Calculate semitone with octave offset (same logic as buildVoicings)
+                    val degree = meseIdx % scaleSemitones.size
+                    val octave = meseIdx / scaleSemitones.size
+                    scaleSemitones[degree] + (octave * 12)
                 } else {
                     voicing.semitones.firstOrNull() ?: 0
                 }
@@ -1308,7 +1368,23 @@ class LyreProgressionAnalyzer(
     }
 
     private fun rootMovementComplexity(chord1: Chord, chord2: Chord): Double {
-        val degreeDistance = (chord2.rootDegree - chord1.rootDegree + 7) % 7
+        // Calculate distance between chord root degrees
+        // When sortByCadence is true (Western cadences), always use degree 0 as tonic
+        // When sortByCadence is false and useMultiChordMese is true, use meseDegree as tonic
+        val degreeDistance = if (!sortByCadence && useMultiChordMese) {
+            // Re-center both chord degrees around mese as degree 0
+            val degree1FromMese = (chord1.rootDegree - meseDegree + 7) % 7
+            val degree2FromMese = (chord2.rootDegree - meseDegree + 7) % 7
+            // Calculate distance between re-centered degrees
+            val dist = (degree2FromMese - degree1FromMese + 7) % 7
+            android.util.Log.d("RootMovement", "Using MESE: ${chord1.rootDegree}→${chord2.rootDegree}, re-centered: $degree1FromMese→$degree2FromMese (meseDegree=$meseDegree), distance=$dist")
+            dist
+        } else {
+            // Traditional: degree 0 is tonic (first string)
+            val dist = (chord2.rootDegree - chord1.rootDegree + 7) % 7
+            android.util.Log.d("RootMovement", "Traditional: ${chord1.rootDegree}→${chord2.rootDegree}, distance=$dist")
+            dist
+        }
         return ROOT_MOVEMENT_STRENGTH[degreeDistance] ?: 1.0
     }
 
@@ -1329,20 +1405,25 @@ class LyreProgressionAnalyzer(
         }
 
         // Determine reference frequency based on chordReferenceMode
-        val referenceFrequency = when (chordReferenceMode) {
-            ChordReferenceMode.BASS -> null  // Use default (minimum)
-            ChordReferenceMode.MIDDLE -> {
-                // Use middle note of the chord (or lower-middle if even)
-                val middleIdx = getMiddleIndex(freqs)
-                freqs[middleIdx]
-            }
-            ChordReferenceMode.MESE -> {
-                // Use middle string of lyre (mese)
-                val meseIdx = meseStringIndex - 1  // Convert to 0-indexed
-                if (meseIdx >= 0 && meseIdx < frequencies.size) {
-                    frequencies[meseIdx]
-                } else {
-                    null  // Fall back to default if invalid
+        // When prioritizing Western cadences, always use bass (traditional approach)
+        val referenceFrequency = if (sortByCadence) {
+            null  // Use default bass note for Western cadences
+        } else {
+            when (chordReferenceMode) {
+                ChordReferenceMode.BASS -> null  // Use default (minimum)
+                ChordReferenceMode.MIDDLE -> {
+                    // Use middle note of the chord (or lower-middle if even)
+                    val middleIdx = getMiddleIndex(freqs)
+                    freqs[middleIdx]
+                }
+                ChordReferenceMode.MESE -> {
+                    // Use middle string of lyre (mese)
+                    val meseIdx = meseStringIndex - 1  // Convert to 0-indexed
+                    if (meseIdx >= 0 && meseIdx < frequencies.size) {
+                        frequencies[meseIdx]
+                    } else {
+                        null  // Fall back to default if invalid
+                    }
                 }
             }
         }
@@ -1595,7 +1676,16 @@ class LyreProgressionAnalyzer(
         val finalChord = chords[chords.size - 1]
 
         // 1. ROOT MOTION PATTERN
-        val rootDegreeDistance = (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+        // Re-center degrees around mese if using multi-chord mese mode
+        val rootDegreeDistance = if (!sortByCadence && useMultiChordMese) {
+            // Re-center both degrees around mese
+            val penultimateDegreeFromMese = (penultimateChord.rootDegree - meseDegree + 7) % 7
+            val finalDegreeFromMese = (finalChord.rootDegree - meseDegree + 7) % 7
+            (finalDegreeFromMese - penultimateDegreeFromMese + 7) % 7
+        } else {
+            // Traditional: use original degrees
+            (finalChord.rootDegree - penultimateChord.rootDegree + 7) % 7
+        }
 
         // Get reference notes based on chordReferenceMode setting
         // (bass, middle, or mese depending on user selection)
@@ -1817,17 +1907,27 @@ class LyreProgressionAnalyzer(
             val identifiedList = progressions.map { prog ->
                 val chordDegrees = prog.chords.map { it.rootDegree }
 
+                // Transform chord degrees if using mese as tonic
+                // When sortByCadence is true (Western cadences), ignore useMultiChordMese
+                val degreesForMatching = if (!sortByCadence && useMultiChordMese) {
+                    // Re-center degrees around mese as degree 0
+                    chordDegrees.map { (it - meseDegree + 7) % 7 }
+                } else {
+                    // Use original degrees (degree 0 is tonic)
+                    chordDegrees
+                }
+
                 // Only identify patterns for triads
                 val allTriads = prog.chords.all { it.size == TRIAD_SIZE }
-                val name = if (allTriads && chordDegrees.size >= 2) {
+                val name = if (allTriads && degreesForMatching.size >= 2) {
                     // A cadence is defined by the LAST TWO CHORDS
-                    val lastTwo = chordDegrees.takeLast(2)
+                    val lastTwo = degreesForMatching.takeLast(2)
                     val cadenceName = twoChordPatternsByMode[mode]?.get(lastTwo)
 
                     // Also check for full progression patterns (for famous progressions like I-V-vi-IV)
                     val fullPattern = when (length) {
-                        3 -> threeChordPatternsByMode[mode]?.get(chordDegrees)
-                        4 -> fourChordPatternsByMode[mode]?.get(chordDegrees)
+                        3 -> threeChordPatternsByMode[mode]?.get(degreesForMatching)
+                        4 -> fourChordPatternsByMode[mode]?.get(degreesForMatching)
                         else -> null
                     }
 
@@ -1839,7 +1939,12 @@ class LyreProgressionAnalyzer(
 
                 // Debug logging
                 if (name != null) {
-                    android.util.Log.d("CadenceID", "Found: $name for degrees $chordDegrees in mode $mode")
+                    val degreeInfo = if (!sortByCadence && useMultiChordMese) {
+                        "original degrees $chordDegrees (transformed to $degreesForMatching with mese=$meseDegree)"
+                    } else {
+                        "degrees $chordDegrees"
+                    }
+                    android.util.Log.d("CadenceID", "Found: $name for $degreeInfo in mode $mode")
                 }
 
                 prog.copy(commonName = name)
