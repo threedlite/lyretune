@@ -610,7 +610,8 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Chord Progression Tool Button (only for Modes)
+            // Chord Progression Tool Button (only for Modes) - HIDDEN FOR NOW
+            /*
             if (scaleType == 0) {
                 OutlinedButton(
                     onClick = {
@@ -624,6 +625,7 @@ fun SettingsScreen(context: Context, onBackPressed: () -> Unit) {
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            */
             
             // Reset to Defaults Button
             Button(

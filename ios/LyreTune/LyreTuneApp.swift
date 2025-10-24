@@ -4444,7 +4444,8 @@ struct SettingsView: View {
                     .background(Color.gray.opacity(0.1))
                 }
 
-                // Chord Progression Tool Button (only for Modes)
+                // Chord Progression Tool Button (only for Modes) - HIDDEN FOR NOW
+                /*
                 if settings.scaleTypeCategory == .modes {
                     Button(action: {
                         showingChordProgression = true
@@ -4463,6 +4464,7 @@ struct SettingsView: View {
                         .background(Color.gray.opacity(0.1))
                     }
                 }
+                */
 
                 Form {
                     // Profile Management Section
