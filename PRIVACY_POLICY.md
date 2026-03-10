@@ -24,9 +24,7 @@ Our app operates entirely offline and:
 ### Local Storage Only
 
 All app data is stored locally on your device:
-- Downloaded classical texts are stored in a local database
-- User preferences (selected language, font size, etc.) are saved locally
-- Reading progress and bookmarks are stored on your device only
+- User preferences are saved locally
 - All data remains under your control and is never transmitted
 
 ## Permissions
