@@ -36,6 +36,10 @@ Lyretune requires minimal permissions:
 - No camera, or location access
 - No access to contacts or other personal data
 
+The App requires the following permission:
+
+Microphone Access: Used solely for real-time audio frequency detection to help tune musical instruments. Audio is processed locally on your device and is never recorded, stored, or transmitted.
+
 ## Children's Privacy
 
 Our app does not collect any information from anyone, including children under the age of 13.
