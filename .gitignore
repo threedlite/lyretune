@@ -117,6 +117,9 @@ Thumbs.db
 *.temp
 *.swp
 
+# Scratch directories (Play policy audit artifacts, etc.)
+.scratch/
+
 # Rust build artifacts (if any)
 /rust/target/
 /rust/Cargo.lock

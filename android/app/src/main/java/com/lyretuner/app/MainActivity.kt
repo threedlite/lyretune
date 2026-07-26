@@ -57,6 +57,10 @@ class MainActivity : ComponentActivity() {
     private var audioTrack: AudioTrack? = null
     private var settingsUpdateTrigger = mutableStateOf(0)
     private var hasRequestedPermission = false
+    private var awaitingPermissionResult = false
+    private var micRationaleDismissed = false
+    private var showMicPermissionRationale = mutableStateOf(false)
+    private var showNoMicrophoneNotice = mutableStateOf(false)
     
     // New Kotlin audio processor
     private val kotlinAudioProcessor = AudioProcessor()
@@ -64,8 +68,14 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
+        awaitingPermissionResult = false
         if (isGranted) {
+            showMicPermissionRationale.value = false
             startAudioProcessing()
+        } else if (!micRationaleDismissed) {
+            // Explain why the microphone is needed instead of leaving a silently
+            // non-functional tuner. Tone playback still works without it.
+            showMicPermissionRationale.value = true
         }
     }
     
@@ -85,24 +95,56 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        
-        checkAudioPermission()
+
+        // The microphone is acquired in onResume(), which always follows onCreate().
     }
     
     private fun checkAudioPermission() {
+        // Devices without a microphone can still use tone playback, so the app
+        // declares the feature as optional and degrades instead of failing.
+        if (!packageManager.hasSystemFeature(PackageManager.FEATURE_MICROPHONE)) {
+            showNoMicrophoneNotice.value = true
+            return
+        }
+
+        // The system permission dialog pauses us; wait for its result rather than
+        // stacking our own rationale behind it.
+        if (awaitingPermissionResult) return
+
         when {
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.RECORD_AUDIO
             ) == PackageManager.PERMISSION_GRANTED -> {
+                showMicPermissionRationale.value = false
                 startAudioProcessing()
             }
             else -> {
                 if (!hasRequestedPermission) {
                     hasRequestedPermission = true
+                    awaitingPermissionResult = true
                     requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                } else if (!micRationaleDismissed) {
+                    showMicPermissionRationale.value = true
                 }
             }
+        }
+    }
+
+    /** Re-request the microphone, or send the user to Settings if the OS will no longer prompt. */
+    private fun retryMicPermission() {
+        micRationaleDismissed = false
+        if (shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            awaitingPermissionResult = true
+            requestPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        } else {
+            // Permanently denied - the system dialog will not appear again.
+            startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    android.net.Uri.fromParts("package", packageName, null)
+                )
+            )
         }
     }
     
@@ -112,6 +154,8 @@ class MainActivity : ComponentActivity() {
     }
     
     private fun startAudioRecording() {
+        if (isRecording) return
+
         val sampleRate = 48000
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
         val audioFormat = AudioFormat.ENCODING_PCM_16BIT
@@ -157,11 +201,23 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    /**
+     * Stops capture and fully releases the microphone. Safe to call repeatedly -
+     * the MIC session must not outlive the visible tuner UI.
+     */
     private fun stopAudioRecording() {
         isRecording = false
-        audioRecord?.stop()
+        try {
+            if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                audioRecord?.stop()
+            }
+        } catch (e: IllegalStateException) {
+            Log.w("LyreTune", "AudioRecord already stopped", e)
+        }
         recordingThread?.join(1000) // Wait up to 1 second for thread to finish
         recordingThread = null
+        audioRecord?.release()
+        audioRecord = null
     }
     
     private fun playStringTones() {
@@ -275,14 +331,22 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Trigger settings reload
         settingsUpdateTrigger.value = settingsUpdateTrigger.value + 1
+        // Re-acquire the microphone released in onPause()
+        checkAudioPermission()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Release the microphone whenever the tuner leaves the screen so that no
+        // capture session survives in the background.
+        stopAudioRecording()
+        stopPlayback()
     }
     
     override fun onDestroy() {
         super.onDestroy()
         stopPlayback()
         stopAudioRecording()
-        audioRecord?.release()
-        audioRecord = null
         
         // Stop Kotlin audio processor
         kotlinAudioProcessor.stopProcessing()
@@ -534,6 +598,58 @@ class MainActivity : ComponentActivity() {
             }
         }
         
+        // Microphone unavailable - explain rather than leaving a dead tuner
+        if (showMicPermissionRationale.value) {
+            AlertDialog(
+                onDismissRequest = { showMicPermissionRationale.value = false },
+                title = { Text("Microphone needed to tune") },
+                text = {
+                    Text(
+                        "LyreTune listens through the microphone to detect the pitch of " +
+                            "each string. Audio is analyzed on your device only - nothing " +
+                            "is recorded, saved, or sent anywhere.\n\n" +
+                            "Without it you can still play reference tones, but pitch " +
+                            "detection will not work."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showMicPermissionRationale.value = false
+                        retryMicPermission()
+                    }) {
+                        Text("Allow microphone")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        // Respect the choice - do not re-prompt on every resume.
+                        micRationaleDismissed = true
+                        showMicPermissionRationale.value = false
+                    }) {
+                        Text("Not now")
+                    }
+                }
+            )
+        }
+
+        if (showNoMicrophoneNotice.value) {
+            AlertDialog(
+                onDismissRequest = { showNoMicrophoneNotice.value = false },
+                title = { Text("No microphone detected") },
+                text = {
+                    Text(
+                        "This device has no microphone, so pitch detection is unavailable. " +
+                            "You can still play reference tones for each string."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showNoMicrophoneNotice.value = false }) {
+                        Text("OK")
+                    }
+                }
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -590,8 +706,6 @@ class MainActivity : ComponentActivity() {
                             // Stop all audio processing
                             stopPlayback()
                             stopAudioRecording()
-                            audioRecord?.release()
-                            audioRecord = null
                             kotlinAudioProcessor.stopProcessing()
                             
                             // Exclude from recents and finish
