@@ -16,10 +16,10 @@ android {
 
     defaultConfig {
         applicationId "com.lyretuner.app"
-        minSdk 24
+        minSdk 23
         targetSdk 36
-        versionCode 17
-        versionName "3.0.17"
+        versionCode 18
+        versionName "3.0.18"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
@@ -82,7 +82,10 @@ dependencies {
     implementation 'org.apache.commons:commons-math3:3.6.1'
 
     // Google Play Age Signals API
-    implementation 'com.google.android.play:age-signals:0.0.3'
+    implementation 'com.google.android.play:age-signals:0.0.4'
+    // age-signals -> play:core-common pulls fragment 1.1.0, which trips the fatal
+    // InvalidFragmentVersionForActivityResult lint check. Pin above the 1.3.0 threshold.
+    implementation 'androidx.fragment:fragment:1.8.5'
     
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
